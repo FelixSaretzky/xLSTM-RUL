@@ -20,10 +20,23 @@ on real data.
 
 ## Setup
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/)
+(`brew install uv`, or see the uv docs for other platforms). Two commands:
+
 ```bash
 git clone --recurse-submodules https://github.com/FelixSaretzky/xLSTM-RUL.git
-# or, if already cloned:
-git submodule update --init
+cd xLSTM-RUL && uv sync
+```
+
+`uv sync` creates `.venv` with all locked dependencies (Python >= 3.11,
+including the notebook stack) and installs `rulbench` itself in editable
+mode, so `import rulbench` just works. If the repo was cloned without
+`--recurse-submodules`, run `git submodule update --init` once.
+
+Open the walkthrough notebooks with:
+
+```bash
+uv run jupyter lab
 ```
 
 The synthetic generator builds on two submodules under `third_party/`:
@@ -46,6 +59,9 @@ Real-benchmark downloads are handled by
 `~/.rulbench`).
 
 ## Quickstart
+
+Run inside the project environment (`uv run python`, or a notebook started
+via `uv run jupyter lab`):
 
 ```python
 # real benchmarks
