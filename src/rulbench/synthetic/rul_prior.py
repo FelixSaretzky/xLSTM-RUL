@@ -28,6 +28,8 @@ Task shapes
 from __future__ import annotations
 
 import contextlib
+import sys
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -46,6 +48,32 @@ except ImportError:                                  # pragma: no cover
 
 # A generated dataset is a flat list of (family_id, unit_id, RulSample).
 Row = Tuple[int, int, RulSample]
+
+
+def _import_causal_time_prior():
+    """Import dotime's ``CausalTimePrior``, resolving the vendored submodules.
+
+    ``causal_time_prior`` / ``dopfnprior`` are not pip-installed packages --
+    they live in ``third_party/`` as pinned git submodules. When they are not
+    already importable (e.g. the notebook's path-setup cell ran), add the
+    submodule checkouts relative to this repo to ``sys.path``.
+    """
+    try:
+        from causal_time_prior.prior import CausalTimePrior
+    except ImportError:
+        root = Path(__file__).resolve().parents[3]           # src/rulbench/synthetic -> repo
+        for sub in ("CausalTimePrior", "Do-PFN-prior"):
+            p = root / "third_party" / sub
+            if p.is_dir() and str(p) not in sys.path:
+                sys.path.insert(0, str(p))
+        try:
+            from causal_time_prior.prior import CausalTimePrior
+        except ImportError as e:
+            raise ImportError(
+                "causal_time_prior is not importable. Initialise the vendored "
+                "submodules first: `git submodule update --init` (from the "
+                "repo root), then retry.") from e
+    return CausalTimePrior
 
 
 def _scm_lag(scm) -> Optional[int]:
@@ -338,8 +366,7 @@ def generate_rul_dataset(n: int = 5, cfg: Optional[RulConfig] = None, seed: int 
     prior : RULPrior           the generator (for generate_batch, reuse, ...)
     """
     if ctp is None:
-        from causal_time_prior.prior import CausalTimePrior
-        ctp = CausalTimePrior(seed=seed)
+        ctp = _import_causal_time_prior()(seed=seed)
     prior = RULPrior(ctp, cfg=cfg, T_max=T_max, task_mode=task_mode, seed=seed, **prior_kw)
     rows = prior.generate(n=n)
     return prior.to_dataframe(rows, long=True), prior.to_dataframe(rows, long=False), rows, prior

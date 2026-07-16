@@ -21,17 +21,25 @@ on real data.
 ## Setup
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/)
-(`brew install uv`, or see the uv docs for other platforms). Two commands:
+(`brew install uv`, or see the uv docs for other platforms).
 
 ```bash
-git clone --recurse-submodules https://github.com/FelixSaretzky/xLSTM-RUL.git
-cd xLSTM-RUL && uv sync
+git clone https://github.com/FelixSaretzky/xLSTM-RUL.git
+cd xLSTM-RUL
+git submodule update --init   # non-recursive on purpose, see below
+uv sync
 ```
+
+Use `git submodule update --init` (not `--recursive`, and not
+`git clone --recurse-submodules`): the CausalTimePrior submodule declares
+further nested submodules over SSH-only URLs that this project never uses --
+recursing into them fails on machines without GitHub SSH keys, while the
+non-recursive init fetches exactly the two pinned dependencies this project
+needs, over HTTPS.
 
 `uv sync` creates `.venv` with all locked dependencies (Python >= 3.11,
 including the notebook stack) and installs `rulbench` itself in editable
-mode, so `import rulbench` just works. If the repo was cloned without
-`--recurse-submodules`, run `git submodule update --init` once.
+mode, so `import rulbench` just works.
 
 Open the walkthrough notebooks with:
 
