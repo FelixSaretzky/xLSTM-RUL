@@ -1,80 +1,35 @@
-"""Exogenous-driver injection into a dotime temporal SCM (hybrid prior, step 1).
+"""Hybrid RUL prior: dotime-sampled sensors driven by a latent health SDE.
 
-State-first emission for the hybrid RUL prior: a latent health index X'(t)
-and an exogenous load s(t) are injected into a sampled ``dotime``
-``TemporalSCM`` as two root driver nodes ("H", "S") with *outgoing* edges
-only, so the sensors respond to health and load (state -> sensors) while
-the sensor-side dependency structure -- intra-slice DAG, lagged cross
-edges, hidden nodes -- remains the sampled dotime prior.
+The generator runs in three stages, top to bottom of this file:
 
-Mechanics, each verified against the pinned ``dotime==0.1.2`` sources:
+1. **Injection** -- a precomputed health trajectory X'(t) and load s(t)
+   are fed into a sampled dotime ``TemporalSCM`` as two extra root nodes
+   ("H", "S") with outgoing edges only, so the sensors *respond* to
+   health and load while the sensor-side structure (graph, lagged
+   edges, hidden nodes) stays the sampled dotime prior.  A rollout of
+   the injected SCM has column 0 = H, column 1 = S, columns 2.. = the
+   original sensors; training data must only ever use columns 2..
+   (column 0 is the label-defining latent).
+2. **Wiring + calibration** -- :func:`sample_calibrated_emission` picks
+   which sensors respond, gives them monotone activations, and scales
+   their weights so the noise-free sensor excursion from X'=0 to X'=1
+   has norm 1.0, with the total sensor noise drawn on the same SNR axis
+   as the sibling generator (``rul_sde``).
+3. **Sampling** -- :func:`sample_hybrid_unit` draws the shared latent
+   block via ``rul_sde`` (onset, SDE operators, load), rolls out the
+   sensors, and emits ``dataset_io.Unit`` records; ``__main__`` is the
+   CLI.
 
-* ``TemporalSCM._simulate`` pre-samples per-node noise via
-  ``noise[v].distribution.sample((total_T,))`` and reads it at the
-  *absolute* step index, burn-in included.  :class:`DeterministicCarrier`
-  exposes exactly that interface and returns a stored signal tensor, so a
-  driver node's trajectory is the injected signal -- exactly, burn-in
-  prefix included, and without consuming any RNG state.
-* A parentless node's mechanism output is its noise verbatim
-  (``TemporalMechanism.forward``, the no-parents branch), which the
-  :class:`_Passthrough` module replicates without drawing the unused
-  weight/bias initialisers from the global RNG.
-* ``TemporalMechanism.forward`` iterates its *own* weight dict and silently
-  drops parents that have no weight entry.  Every wired child mechanism is
-  therefore deep-copied and given an explicit ``weights_instant`` parameter
-  for its driver; the input SCM and any previously injected SCM stay
-  untouched (see the double-injection test).
-* ``G_lags`` matrices are indexed by topological *position* in the consumer
-  (``TemporalSCM._compute_lagged_parents``).  Prepending the two drivers
-  and embedding the old matrices at ``[2:, 2:]`` therefore preserves the
-  sensor block identically.  Driver rows and columns stay zero: no lagged
-  driver edges in this step.  (v2 trap: enabling a lagged driver edge
-  needs BOTH a ``G_lags`` entry and an explicit ``weights_lagged[k]``
-  parameter on the child mechanism -- a matrix entry alone is silently
-  dropped.)
+dotime is pinned to exactly 0.1.2: the injection rides upstream
+internals (the private noise path, the rollout's unused ``generator``
+argument), verified against that version.  Rollout noise comes from the
+global torch RNG; :func:`sample_hybrid_unit` seeds it itself, while
+:func:`observational_rollout` leaves seeding to the caller.
 
-Column layout of a rollout of the injected SCM: column 0 = "H", column 1 =
-"S", columns 2..N+1 = the original nodes in their original topological
-order.  The Unit-emission step must emit ``out[:, 2:]`` only -- column 0
-is the label-defining latent, column 1 the noise-free load (observed load
-belongs in dedicated noisy load channels; whether an exactly-clean load
-channel is additionally emitted is a sampling-step decision).  Driver
-nodes are stamped with ``hidden=True, driver=True`` node attributes so
-attribute-based sensor filters cannot misclassify them.
-
-Divergence contract: dotime aborts a rollout whose values exceed 500 at a
-checkpoint (or fail the final check) and then returns **all zeros** --
-driver columns included -- with only a ``RuntimeWarning``.  A zeroed unit
-would pair live RUL labels with dead sensors, so rollouts must go through
-:func:`observational_rollout`, which turns divergence into
-:class:`RolloutDiverged` and verifies both driver columns bitwise against
-the stored signals.
-
-Interventions (not used in v1): ``InterventionSpec`` targets are
-*positional* topo indices.  On an injected SCM every index shifts by +2,
-and indices 0/1 would overwrite the carrier -- never intervene on them.
-
-Burn-in convention: one ``burn_in`` value governs signal construction,
-rollout, and label pairing.  :func:`observational_rollout` derives ``T``
-from the carrier length so the split cannot be double-booked; the healthy
-prefix does not have to be zero (initial-health jitter is a sampling-step
-choice), it only has to be what the labels assume.
-
-Version pin: the carrier rides the private noise path above, and
-``_simulate``'s ``generator`` parameter is unused upstream (all rollout
-noise comes from the global torch RNG) -- both are plausible upstream fix
-targets, hence the exact ``dotime==0.1.2`` pin in ``pyproject.toml``.
-Reproducible rollouts require seeding the global RNG
-(``torch.manual_seed``) before each call.
-
-Wiring policy is *not* this module's concern (it belongs to the sampling
-step): callers decide which sensors respond and at what weight.  Two traps
-the policy must respect: wiring a driver into a previously parentless
-sensor moves it off the noise-passthrough path (output becomes
-``activation(w*H + bias) + eps`` instead of ``eps``), and under this
-project's builder configuration (ShiftedExponential rate 1.0 vs 10.0)
-root-node noise scales sit roughly an order of magnitude above non-root
-ones.
+The upstream contracts and traps live at their definition sites:
+carrier exactness (:class:`DeterministicCarrier`), silently dropped
+parents and intervention index shifts (:func:`inject_drivers`),
+divergence handling (:func:`observational_rollout`).
 """
 from __future__ import annotations
 
@@ -207,6 +162,17 @@ def inject_drivers(
     -------
     TemporalSCM
         A fresh SCM; roll it out with :func:`observational_rollout`.
+
+    Notes
+    -----
+    The weight entries are what make a driver edge live: dotime
+    mechanisms silently ignore parents they hold no weight for.  Driver
+    nodes carry ``hidden=True, driver=True`` node attributes so
+    attribute-based sensor filters classify them correctly.  If the
+    injected SCM is ever used with an ``InterventionSpec`` (v1 does
+    not): targets are positional topo indices, which all shift by +2
+    here, and indices 0/1 would overwrite the carriers -- never
+    intervene on them.
     """
     topo = scm.dag.topo_order
     for d in (DRIVER_HEALTH, DRIVER_LOAD):
@@ -235,7 +201,10 @@ def inject_drivers(
     G_lags = []
     for G_k in scm.dag.G_lags:
         G_new = np.zeros((n + 2, n + 2), dtype=G_k.dtype)
-        G_new[2:, 2:] = G_k  # topo-position coordinates; sensor block unchanged
+        # topo-position coordinates; sensor block unchanged.  Driver rows stay
+        # zero: a lagged driver edge would need BOTH a matrix entry here AND a
+        # weights_lagged parameter on the child (else it is silently dropped).
+        G_new[2:, 2:] = G_k
         G_lags.append(G_new)
 
     dag = TemporalDAG(
