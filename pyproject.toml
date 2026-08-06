@@ -5,10 +5,8 @@ description = "Zero-shot TSFM evaluation harness for RUL benchmarks"
 requires-python = ">=3.11"
 dependencies = [
     "h5py>=3.16.0",
+    "marimo>=0.23.15",
     "numpy>=2.1",
-    "pandas>=2.3,<3",   # verified on pandas 2.x; lift the cap after testing on 3.x
-    "rul-datasets>=0.18.0",
-    "scikit-learn>=1.6",
     "torch>=2.9",
 ]
 
