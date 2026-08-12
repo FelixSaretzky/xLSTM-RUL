@@ -195,6 +195,7 @@ class TSCMPriorConfig:
     censor_prob: float = 0.3
     rul_cap: float = 125.0
     couple_hi: bool = True
+    x_0_range: tuple = (0.0, 0.05)
 
 
 class TSCMGenerator:
@@ -349,7 +350,8 @@ class TSCMGenerator:
     def _stressor(self, T):
         c, rng = self.cfg, self.rng
         rho = float(rng.uniform(*c.stressor_rho_range))
-        z = 0.0; s = np.empty(T)
+        z = float(rng.standard_normal())
+        s = np.empty(T)
         seasonal = rng.random() < c.p_seasonal
         per = float(rng.uniform(*c.season_period_range)) if seasonal else 0.0
         amp = float(rng.uniform(*c.season_amp_range)) if seasonal else 0.0
@@ -378,7 +380,9 @@ class TSCMGenerator:
         """Euler-Maruyama in the NORMALISED state space: failure at X' >= 1."""
         c, rng = self.cfg, self.rng
         dt, sq = c.dt, np.sqrt(c.dt) 
-        X = np.zeros(c.hard_cap)
+        x0 = float(rng.uniform(*c.x0_range))       # e.g. (0.0, 0.1) in threshold units
+        X = np.full(c.hard_cap, x0)
+        #X = np.zeros(c.hard_cap)
         for t in range(onset + 1, c.hard_cap):
             x = X[t - 1]
             mu = s[t-1] * float(ops["mu"](x))
@@ -477,7 +481,7 @@ class TSCMGenerator:
         # --- (A) piecewise-linear RUL label for the baseline ---
         tt = np.arange(T)
         rul = np.clip(t_fail - tt, 0, c.rul_cap).astype(np.float32)
-        rul[:onset] = min(t_fail - onset, c.rul_cap)
+        # rul[:onset] = min(t_fail - onset, c.rul_cap) # Could be a leakage
 
         uid = self._next_id; self._next_id += 1
         return Unit(sensors=x.astype(np.float32), hi=X.astype(np.float32),
