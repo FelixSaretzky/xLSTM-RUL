@@ -195,7 +195,7 @@ class TSCMPriorConfig:
     censor_prob: float = 0.3
     rul_cap: float = 125.0
     couple_hi: bool = True
-    x_0_range: tuple = (0.0, 0.05)
+    x0_range: tuple = (0.0, 0.1)
 
 
 class TSCMGenerator:
