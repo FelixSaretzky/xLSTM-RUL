@@ -11,12 +11,17 @@ __pycache__/
 src/notebooks/*.parquet
 
 # LaTeX build artifacts
-paper/*.aux
-paper/*.bbl
-paper/*.blg
-paper/*.log
-paper/*.out
-paper/*.synctex.gz
-paper/*.fls
-paper/*.fdb_latexmk
-paper/template.pdf
+paper/**/*.aux
+paper/**/*.bbl
+paper/**/*.blg
+paper/**/*.log
+paper/**/*.out
+paper/**/*.synctex.gz
+paper/**/*.fls
+paper/**/*.fdb_latexmk
+paper/**/*.spl
+paper/**/*-eps-converted-to.pdf
+paper/**/main.pdf
+
+# local paper PDFs (copyright — never push)
+literature/
