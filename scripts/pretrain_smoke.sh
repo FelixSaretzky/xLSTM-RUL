@@ -85,12 +85,24 @@ done <<'EOF'
 24 100 8
 30 100 9
 EOF
+# The hybrid arm is the slow part (dotime calibration, CPU-bound):
+# generate the four files IN PARALLEL, four threads each.
+pids=()
 for k in "${HYB_TRAIN_W[@]}"; do
-    [ -f "data/hybrid_train_w$k.h5" ] || python -m rulbench.synthetic.rul_hybrid \
-        --out "data/hybrid_train_w$k.h5" --n 500 --seed $((100 + k)) --n-sensors "$k"
+    [ -f "data/hybrid_train_w$k.h5" ] && continue
+    OMP_NUM_THREADS=4 python -m rulbench.synthetic.rul_hybrid \
+        --out "data/hybrid_train_w$k.h5" --n 500 --seed $((100 + k)) \
+        --n-sensors "$k" > "data/hybrid_w$k.gen.log" 2>&1 &
+    pids+=($!)
 done
-[ -f data/hybrid_val.h5 ] || python -m rulbench.synthetic.rul_hybrid \
-    --out data/hybrid_val.h5 --n 200 --seed 1
+if [ ! -f data/hybrid_val.h5 ]; then
+    OMP_NUM_THREADS=4 python -m rulbench.synthetic.rul_hybrid \
+        --out data/hybrid_val.h5 --n 200 --seed 1 \
+        > data/hybrid_val.gen.log 2>&1 &
+    pids+=($!)
+fi
+for p in "${pids[@]:-}"; do wait "$p"; done
+tail -q -n 2 data/hybrid_*.gen.log 2>/dev/null || true
 
 # Explicit train list + weights: hybrid files weight 1, sde files 3/8 --
 # equal TOTAL sampling mass per prior arm (declared, not accidental).
