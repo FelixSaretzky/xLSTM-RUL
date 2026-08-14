@@ -735,10 +735,12 @@ if __name__ == "__main__":
     ap.add_argument("--out", required=True, help="target file, e.g. data/hybrid_train.h5")
     ap.add_argument("--n", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--n-sensors", type=int, default=8,
+                    help="observed process sensors (EmissionConfig.n_nodes)")
     ap.add_argument("--check-every", type=int, default=100)
     a = ap.parse_args()
 
-    hcfg = HybridConfig()
+    hcfg = HybridConfig(emission=EmissionConfig(n_nodes=a.n_sensors))
     print(f"Generating {a.n} hybrid units -> {a.out}  "
           f"({hcfg.emission.n_nodes} sensors + {hcfg.n_load_channels} load channels, "
           f"seed={a.seed})")
