@@ -24,3 +24,8 @@ dev = [
     "pyarrow>=25.0.0",
     "pytest>=9.1.1",
 ]
+train = [
+    "torch>=2.4",
+    "wandb>=0.28.2",
+    "xlstm==2.0.5",
+]
