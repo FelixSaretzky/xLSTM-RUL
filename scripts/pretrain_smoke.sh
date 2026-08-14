@@ -19,7 +19,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "== environment probe =="
-nvidia-smi | head -5
+# `|| true`: under pipefail, head's early exit can SIGPIPE nvidia-smi
+# and would abort the whole script.
+nvidia-smi | head -5 || true
 python - <<'EOF'
 import torch
 assert torch.cuda.is_available(), "no CUDA device visible to torch"
