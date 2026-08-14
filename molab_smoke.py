@@ -1,6 +1,8 @@
 """Molab smoke test for the pretraining stack (marimo notebook).
 
-Upload to molab.marimo.io and run the cells top-down.  Assumes the
+Upload to molab.marimo.io.  FIRST switch the runtime to lazy (footer:
+Runtime settings -> autorun off) so opening the notebook does not start
+the whole pipeline, then run the cells top-down.  Assumes the
 pretrain code is on GitHub (github.com/FelixSaretzky/xLSTM-RUL); the
 12h GPU budget is spent as: env probe -> data generation -> 100-step
 smoke of all three arms -> one real variant-C run.
@@ -29,6 +31,27 @@ def _():
         return r.returncode, out
 
     return (sh,)
+
+
+@app.cell
+def _():
+    # W&B key as a RUNTIME input -- never stored in this file.  Paste the
+    # key from wandb.ai/authorize, or leave empty (falls back to log.jsonl).
+    import marimo as mo
+    wandb_key = mo.ui.text(kind="password",
+                           label="WANDB_API_KEY (optional, runtime only)")
+    wandb_key
+    return (wandb_key,)
+
+
+@app.cell
+def _(wandb_key):
+    import os
+    if wandb_key.value:
+        os.environ["WANDB_API_KEY"] = wandb_key.value
+    wandb_env = bool(os.environ.get("WANDB_API_KEY"))
+    print("W&B:", "key set" if wandb_env else "no key -> log.jsonl fallback")
+    return (wandb_env,)
 
 
 @app.cell
@@ -120,8 +143,9 @@ def _(SDE_TRAIN_W, HYB_TRAIN_W):
 
 
 @app.cell
-def _(sh, slstm_flag, TRAIN_ARGS):
+def _(sh, slstm_flag, TRAIN_ARGS, wandb_env):
     # --- 100-step smoke, all three arms ----------------------------------
+    print(f"W&B enabled: {wandb_env}")
     for variant in "ABC":
         sh(f"cd repo && python -m rulbench.pretrain.train {TRAIN_ARGS} "
            f"--out runs/smoke_{variant} --variant {variant} "
@@ -131,10 +155,10 @@ def _(sh, slstm_flag, TRAIN_ARGS):
 
 
 @app.cell
-def _(sh, slstm_flag, TRAIN_ARGS):
+def _(sh, slstm_flag, TRAIN_ARGS, wandb_env):
     # --- the real run (variant C, ~20k steps).  W&B logging is on by
-    # default (project xlstm-rul-pretrain): set WANDB_API_KEY in the
-    # molab secrets, or it falls back to log.jsonl with a warning. -------
+    # default (project xlstm-rul-pretrain) when a key is set above. ------
+    print(f"W&B enabled: {wandb_env}")
     sh(f"cd repo && python -m rulbench.pretrain.train {TRAIN_ARGS} "
        f"--out runs/c_20k --variant C --steps 20000 --batch 256 "
        f"{slstm_flag}", timeout=None)
