@@ -78,6 +78,20 @@ def _(sh):
 @app.cell
 def _(sh):
     # --- sLSTM CUDA kernel probe (compiles at first use, takes minutes) --
+    # xlstm crashes at IMPORT TIME (not compile time) when a GPU is
+    # visible but CUDA_HOME is unset (its slstm cuda_init queries the
+    # toolkit include paths on import).  Point CUDA_HOME at the real
+    # toolkit if the image has one, else at a dummy: that unblocks the
+    # import for every training cell, and the probe below then decides
+    # whether the fused kernel actually compiles.
+    import os
+    if not os.environ.get("CUDA_HOME"):
+        real = next((p for p in ("/usr/local/cuda", "/opt/cuda")
+                     if os.path.isdir(p)), None)
+        os.environ["CUDA_HOME"] = real or "/opt/cuda-not-installed"
+        print(f"CUDA_HOME={os.environ['CUDA_HOME']}"
+              + ("" if real else "  (dummy -> import unblocked, fused "
+                                 "sLSTM kernel unavailable)"))
     code = (
         "import torch;"
         "from rulbench.pretrain.model import ModelConfig, RULPretrainModel;"
