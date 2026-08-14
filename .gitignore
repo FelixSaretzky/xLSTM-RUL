@@ -21,7 +21,6 @@ paper/**/*.fls
 paper/**/*.fdb_latexmk
 paper/**/*.spl
 paper/**/*-eps-converted-to.pdf
-paper/**/main.pdf
 
 # local paper PDFs (copyright — never push)
 literature/
