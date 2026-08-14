@@ -15,11 +15,13 @@ the training commands fall back to --no-slstm if it fails).
 
 import marimo
 
+__generated_with = "0.23.16"
 app = marimo.App()
 
 
 @app.cell
 def _():
+    import os
     import subprocess
 
     def sh(cmd, timeout=None):
@@ -30,7 +32,7 @@ def _():
         print(out[-4000:])
         return r.returncode, out
 
-    return (sh,)
+    return (os, sh)
 
 
 @app.cell
@@ -45,8 +47,7 @@ def _():
 
 
 @app.cell
-def _(wandb_key):
-    import os
+def _(os, wandb_key):
     if wandb_key.value:
         os.environ["WANDB_API_KEY"] = wandb_key.value
     wandb_env = bool(os.environ.get("WANDB_API_KEY"))
@@ -76,7 +77,7 @@ def _(sh):
 
 
 @app.cell
-def _(sh):
+def _(os, sh):
     # --- sLSTM CUDA kernel probe (compiles at first use, takes minutes) --
     # xlstm crashes at IMPORT TIME (not compile time) when a GPU is
     # visible but CUDA_HOME is unset (its slstm cuda_init queries the
@@ -84,7 +85,6 @@ def _(sh):
     # toolkit if the image has one, else at a dummy: that unblocks the
     # import for every training cell, and the probe below then decides
     # whether the fused kernel actually compiles.
-    import os
     if not os.environ.get("CUDA_HOME"):
         real = next((p for p in ("/usr/local/cuda", "/opt/cuda")
                      if os.path.isdir(p)), None)
