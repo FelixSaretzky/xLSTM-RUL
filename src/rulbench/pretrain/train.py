@@ -6,21 +6,16 @@ Pretraining CLI -- plain PyTorch loop over sampled windows.
         --val   data/hybrid_val.h5   data/sde_val.h5 \\
         --out runs/v1 --steps 20000
 
-The training arms of the ablation are selected with --variant:
-A = RUL head only (direct baseline), B = health + dynamics (simulation
-route), C = all three heads.  Everything else -- sampler, normalisation,
-encoder, budget, validation draws -- is identical across arms by
-construction (the validation draw seed is fixed, independent of --seed,
-so seed replicates score on the same windows).
+One model, all three heads: health, dynamics, RUL.  The validation
+draw seed is fixed, independent of --seed, so seed replicates score on
+the same windows.
 
 The first step logs the per-head loss magnitudes; the targets are all
 standardised to O(1), and that line is where a regression of this
 invariant shows up first.  Validation is reported PER FILE (a pooled
 number would be a function of the val-file mixture); ``best.pt`` is
-selected on the per-file criterion averaged with equal file weight --
-the RUL part when the arm has one (A, C), the summed standardised
-parts otherwise (B).  ``last.pt`` is always written, so arms can also
-be compared at the fixed final step.  ``--train-weights`` declares the
+selected on the per-file RUL validation loss averaged with equal file
+weight.  ``last.pt`` is always written.  ``--train-weights`` declares the
 arm/width sampling mixture explicitly instead of inheriting it from
 the file sizes.
 """
@@ -39,11 +34,6 @@ from rulbench.pretrain.model import (ModelConfig, RULPretrainModel,
                                      model_summary, pretrain_loss,
                                      save_checkpoint)
 from rulbench.pretrain.windows import WindowConfig, WindowSampler
-
-VARIANTS = {"A": dict(use_health=False, use_dynamics=False, use_rul=True),
-            "B": dict(use_health=True, use_dynamics=True, use_rul=False),
-            "C": dict(use_health=True, use_dynamics=True, use_rul=True)}
-
 
 def pick_device(name: str) -> torch.device:
     if name != "auto":
@@ -92,7 +82,6 @@ def main(argv=None):
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--variant", default="C", choices=sorted(VARIANTS))
     ap.add_argument("--dim", type=int, default=512)
     ap.add_argument("--blocks", type=int, default=8)
     ap.add_argument("--no-slstm", action="store_true",
@@ -130,7 +119,7 @@ def main(argv=None):
     mcfg = ModelConfig(in_channels=sampler.n_channels, embedding_dim=a.dim,
                        num_blocks=a.blocks, context_length=a.window,
                        slstm_last=not a.no_slstm,
-                       slstm_backend=a.slstm_backend, **VARIANTS[a.variant])
+                       slstm_backend=a.slstm_backend)
     model = RULPretrainModel(mcfg).to(device)
     if mcfg.slstm_last and device.type != "cuda":
         print("WARNING: the vanilla sLSTM recurrence is a Python loop over "
@@ -139,7 +128,7 @@ def main(argv=None):
               "mLSTM-only). Use --no-slstm locally, sLSTM on the cluster.")
     grid = torch.from_numpy(sampler.grid).to(device)
     print(f"{model_summary(model)}  device={device}  "
-          f"units={sampler.n_units}  variant={a.variant}")
+          f"units={sampler.n_units}")
 
     decay = [p for p in model.parameters() if p.dim() >= 2]
     rest = [p for p in model.parameters() if p.dim() < 2]
@@ -202,7 +191,7 @@ def main(argv=None):
         if step % a.val_every == 0 or step == a.steps:
             val = {name: evaluate(model, vs, draws, grid, a.batch, device)
                    for name, vs, draws in val_sets}
-            crit = [v.get("rul", sum(v.values())) for v in val.values()]
+            crit = [v["rul"] for v in val.values()]
             val_crit = sum(crit) / len(crit)
             log.write(json.dumps({"step": step, "val": val}) + "\n")
             log.flush()

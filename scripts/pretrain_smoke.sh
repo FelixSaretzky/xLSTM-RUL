@@ -6,8 +6,8 @@
 #   git clone https://github.com/FelixSaretzky/xLSTM-RUL.git && cd xLSTM-RUL
 #   pip install -e . "xlstm==2.0.5" wandb
 #   export WANDB_API_KEY=...          # optional; falls back to log.jsonl
-#   bash scripts/pretrain_smoke.sh            # probe + data + 3-arm smoke
-#   bash scripts/pretrain_smoke.sh full       # ... + the 20k variant-C run
+#   bash scripts/pretrain_smoke.sh            # probe + data + 100-step smoke
+#   bash scripts/pretrain_smoke.sh full       # ... + the 20k run
 #
 # Long runs: start inside tmux/screen so an SSH drop does not kill them.
 #
@@ -113,18 +113,16 @@ for k in "${SDE_TRAIN_W[@]}"; do TRAIN+=("data/sde_train_w$k.h5"); WEIGHTS+=("0.
 VAL=(data/hybrid_val.h5)
 for k in 3 8 10 16 24 30; do VAL+=("data/sde_val_w$k.h5"); done
 
-echo "== 100-step smoke, all three arms =="
-for V in A B C; do
-    python -m rulbench.pretrain.train \
-        --train "${TRAIN[@]}" --train-weights "${WEIGHTS[@]}" --val "${VAL[@]}" \
-        --out "runs/smoke_$V" --variant "$V" \
-        --steps 100 --batch 256 $SLSTM --val-every 100 --log-every 25
-done
+echo "== 100-step smoke =="
+python -m rulbench.pretrain.train \
+    --train "${TRAIN[@]}" --train-weights "${WEIGHTS[@]}" --val "${VAL[@]}" \
+    --out runs/smoke \
+    --steps 100 --batch 256 $SLSTM --val-every 100 --log-every 25
 
 if [ "${1:-}" = "full" ]; then
-    echo "== variant-C 20k run =="
+    echo "== 20k run =="
     python -m rulbench.pretrain.train \
         --train "${TRAIN[@]}" --train-weights "${WEIGHTS[@]}" --val "${VAL[@]}" \
-        --out runs/c_20k --variant C --steps 20000 --batch 256 $SLSTM
+        --out runs/full_20k --steps 20000 --batch 256 $SLSTM
 fi
 echo "done. checkpoints under runs/ -- download them or rely on W&B."

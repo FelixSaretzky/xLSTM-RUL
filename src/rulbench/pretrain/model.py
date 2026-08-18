@@ -12,10 +12,6 @@ trailing pads no real step ever sees a pad.  The stack has no mask API;
 masking happens exclusively in the heads (masked health loss, key
 padding in the cross-attention, masked pooling).
 
-Head switches implement the training arms of the ablation: RUL only
-(direct baseline), health+dynamics (the simulation route, label-free at
-inference), all three.
-
 The dynamics head reads the operator curves off the encoded window with
 grid-query cross-attention.  Architecturally this follows the
 AttentionOperator of OpenFIM (github.com/FIM4Science/OpenFIM @ cee2bb5,
@@ -28,7 +24,7 @@ time).  ``AttentionPooling`` mirrors ``src/model/encoding.py``.
 Loss targets are all O(1) by construction: hi in threshold units, RUL
 divided by rul_cap, and the log operators standardised by the sampler
 (raw log values are ~N(-5, 2^2); unstandardised they would dominate the
-shared gradient ~30x and silently unbalance the ablation arms).  The
+shared gradient ~30x and silently unbalance the heads).  The
 training CLI logs the per-head parts at step 1, so a regression of this
 invariant is visible, not assumed.
 """
@@ -58,17 +54,9 @@ class ModelConfig:
     pool_heads: int = 4
     dyn_layers: int = 2
     dyn_heads: int = 4
-    use_health: bool = True
-    use_dynamics: bool = True
-    use_rul: bool = True
     w_health: float = 1.0
     w_dyn: float = 1.0
     w_rul: float = 1.0
-
-    def head_flags(self) -> str:
-        return "".join(k for k, v in [("H", self.use_health),
-                                      ("D", self.use_dynamics),
-                                      ("R", self.use_rul)] if v)
 
 
 class AttentionPooling(nn.Module):
@@ -155,55 +143,40 @@ class RULPretrainModel(nn.Module):
         D = cfg.embedding_dim
         self.in_proj = nn.Linear(cfg.in_channels, D)
         self.encoder = xLSTMBlockStack(_stack_config(cfg))
-        if cfg.use_health:
-            self.health_head = nn.Linear(D, 1)
-        if cfg.use_dynamics:
-            self.dyn_head = GridCrossAttention(
-                D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads)
-        if cfg.use_rul:
-            self.rul_pool = AttentionPooling(D, num_heads=cfg.pool_heads)
-            self.rul_head = nn.Linear(D, 1)
+        self.health_head = nn.Linear(D, 1)
+        self.dyn_head = GridCrossAttention(
+            D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads)
+        self.rul_pool = AttentionPooling(D, num_heads=cfg.pool_heads)
+        self.rul_head = nn.Linear(D, 1)
 
-    def forward(self, x, mask, grid=None) -> dict:
+    def forward(self, x, mask, grid) -> dict:
         """x (B, T, C) normalised windows, mask (B, T) True = real step,
         grid (G,) query locations for the dynamics head."""
-        cfg = self.cfg
         h = self.encoder(self.in_proj(x))
-        out = {}
-        if cfg.use_health:
-            out["health"] = self.health_head(h).squeeze(-1)      # (B, T)
-        if cfg.use_dynamics:
-            if grid is None:
-                raise ValueError("dynamics head needs grid query locations")
-            out["dyn"] = self.dyn_head(h, mask, grid)            # (B, G, 2)
-        if cfg.use_rul:
-            out["rul"] = self.rul_head(
-                self.rul_pool(h, mask=mask)).squeeze(-1)         # (B,)
-        return out
+        return {
+            "health": self.health_head(h).squeeze(-1),           # (B, T)
+            "dyn": self.dyn_head(h, mask, grid),                 # (B, G, 2)
+            "rul": self.rul_head(
+                self.rul_pool(h, mask=mask)).squeeze(-1),        # (B,)
+        }
 
 
 def pretrain_loss(out: dict, batch: dict, cfg: ModelConfig
                   ) -> tuple[torch.Tensor, dict]:
-    """Weighted sum of the active heads' losses; returns (total, parts)."""
-    parts = {}
-    total = torch.zeros((), device=batch["x"].device)
-    if cfg.use_health:
-        m = batch["mask"].float()
-        se = (out["health"] - batch["y_health"]) ** 2 * m
-        parts["health"] = se.sum() / m.sum().clamp(min=1.0)
-        total = total + cfg.w_health * parts["health"]
-    if cfg.use_dynamics:
-        parts["dyn"] = ((out["dyn"] - batch["y_dyn"]) ** 2).mean()
-        total = total + cfg.w_dyn * parts["dyn"]
-    if cfg.use_rul:
-        parts["rul"] = ((out["rul"] - batch["y_rul"]) ** 2).mean()
-        total = total + cfg.w_rul * parts["rul"]
+    """Weighted sum of the three heads' losses; returns (total, parts)."""
+    m = batch["mask"].float()
+    se = (out["health"] - batch["y_health"]) ** 2 * m
+    parts = {"health": se.sum() / m.sum().clamp(min=1.0),
+             "dyn": ((out["dyn"] - batch["y_dyn"]) ** 2).mean(),
+             "rul": ((out["rul"] - batch["y_rul"]) ** 2).mean()}
+    total = (cfg.w_health * parts["health"] + cfg.w_dyn * parts["dyn"]
+             + cfg.w_rul * parts["rul"])
     return total, parts
 
 
 def model_summary(model: RULPretrainModel) -> str:
     n = sum(p.numel() for p in model.parameters())
-    return (f"RULPretrainModel[{model.cfg.head_flags()}] "
+    return (f"RULPretrainModel "
             f"D={model.cfg.embedding_dim} blocks={model.cfg.num_blocks} "
             f"params={n / 1e6:.2f}M")
 
