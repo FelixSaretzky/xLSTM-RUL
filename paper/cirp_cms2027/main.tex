@@ -182,7 +182,7 @@ Preventive maintenance truncates degradation before failure, and fleets are smal
 Recent studies therefore repurpose time-series foundation models for prognostics, while pretraining on degradation processes remains largely unexplored.
 This paper presents RULix, a prognostic foundation model pretrained exclusively on synthetic run-to-failure data.
 A synthetic prior generates sensor data from degradation processes based on stochastic differential equations (SDEs) and observed through structural causal graphs unrolled over time.
-An extended long short-term memory (xLSTM) encoder embeds sliding sensor windows in a latent space that represents a machine dynamics, from which we predict its health state, degradation dynamics, and RUL.
+An extended long short-term memory (xLSTM) encoder embeds sliding sensor windows in a latent space that represents machine dynamics, from which we predict the machine's health state, degradation dynamics, and RUL.
 The pretrained model is evaluated zero-shot on the C-MAPSS and N-CMAPSS turbofan benchmarks. 
 The approach is a step toward prognostic foundation models for assets without recorded failure histories.
 
