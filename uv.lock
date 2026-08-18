@@ -624,7 +624,7 @@ wheels = [
 
 [[package]]
 name = "dotime"
-version = "0.1.2"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "matplotlib" },
@@ -638,9 +638,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions", marker = "python_full_version < '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/71/e5585e343033bdfab4ec3ec9440deb933dfcd8fdaa9d692bb09c8c276377/dotime-0.1.2.tar.gz", hash = "sha256:0828d2f3dfd981e698dc9d5dc8226691c0512702264f4bda2d5bda68adf0071e", size = 142151, upload-time = "2026-07-20T14:42:16.355Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/6d/5cedc15ec6a0a33cda1adac88333e6a77b4ea1b693c8486fe969aee7487d/dotime-0.1.3.tar.gz", hash = "sha256:2eaf913e5d496d187c801476abeb3749dbef2683dbe9728bbfd6497326b3c7f5", size = 153683, upload-time = "2026-08-15T08:30:30.872Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/bd/22d98bbf5738899408a2eebae7efe6ba811c4e792ab136f8bfcb46de8d75/dotime-0.1.2-py3-none-any.whl", hash = "sha256:bf461eeb462106437c3d5bb92b7da4a765a21ce3c09db84fddaa4a86dfcbd98b", size = 146091, upload-time = "2026-07-20T14:42:14.951Z" },
+    { url = "https://files.pythonhosted.org/packages/98/ad/0092e23e18d8ae6774863958dc0803758e9d543838d348d84ddba4e883c8/dotime-0.1.3-py3-none-any.whl", hash = "sha256:884c2ac2ec3345b3f3512815a59f0ef5fec8dde928ed2db0464a5efe87cf4e8c", size = 150446, upload-time = "2026-08-15T08:30:29.216Z" },
 ]
 
 [[package]]
@@ -3212,7 +3212,7 @@ train = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dotime", specifier = "==0.1.2" },
+    { name = "dotime", specifier = "==0.1.3" },
     { name = "h5py", specifier = ">=3.16.0" },
     { name = "marimo", specifier = ">=0.23.15" },
     { name = "numpy", specifier = ">=2.1" },

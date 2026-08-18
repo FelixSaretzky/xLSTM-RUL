@@ -20,9 +20,11 @@ The generator runs in three stages, top to bottom of this file:
    sensors, and emits ``dataset_io.Unit`` records; ``__main__`` is the
    CLI.
 
-dotime is pinned to exactly 0.1.2: the injection rides upstream
+dotime is pinned to exactly 0.1.3: the injection rides upstream
 internals (the private noise path, the rollout's unused ``generator``
-argument), verified against that version.  Rollout noise comes from the
+argument), verified against that version.  (0.1.2, the version the
+injection was first verified against, was removed from PyPI; every
+module this file imports is byte-identical between the two.)  Rollout noise comes from the
 global torch RNG; :func:`sample_hybrid_unit` seeds it itself, while
 :func:`observational_rollout` leaves seeding to the caller.
 
