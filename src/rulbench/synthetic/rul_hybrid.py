@@ -36,6 +36,7 @@ divergence handling (:func:`observational_rollout`).
 from __future__ import annotations
 
 import copy
+import os
 import warnings
 from dataclasses import dataclass, field
 
@@ -716,13 +717,18 @@ def write_hybrid_dataset(path: str, n: int, seed: int,
     hcfg = hcfg or HybridConfig()
     n_channels = hcfg.emission.n_nodes + hcfg.n_load_channels
     probe: list[Unit] = []
-    with HDF5Writer(path, _json_cfg(hcfg), n_sensors=n_channels) as w:
+    # Write under a temp name and rename only on success, so a crashed
+    # run never leaves a partial file that "skip if exists" would reuse
+    # (issue #7).
+    tmp = path + ".tmp"
+    with HDF5Writer(tmp, _json_cfg(hcfg), n_sensors=n_channels) as w:
         for k, u in enumerate(generate_units(n, seed, hcfg)):
             w.append(u)
             if len(probe) < 500:
                 probe.append(u)
             if progress_every and (k + 1) % progress_every == 0:
                 print(f"  {k + 1}/{n} ...")
+    os.replace(tmp, path)
     return probe
 
 
