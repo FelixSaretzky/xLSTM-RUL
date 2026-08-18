@@ -101,7 +101,7 @@ if [ ! -f data/hybrid_val.h5 ]; then
         > data/hybrid_val.gen.log 2>&1 &
     pids+=($!)
 fi
-for p in "${pids[@]:-}"; do wait "$p"; done
+for p in ${pids[@]+"${pids[@]}"}; do wait "$p"; done
 tail -q -n 2 data/hybrid_*.gen.log 2>/dev/null || true
 
 # Explicit train list + weights: hybrid files weight 1, sde files 3/8 --
