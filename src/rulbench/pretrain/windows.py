@@ -87,7 +87,10 @@ class WindowConfig:
     min_real: int = 64          # shortest real content of a uniform window
     hi_clamp: float = 1.2
     std_floor: float = 1e-4
-    load_guard_c: float = 0.25  # load slot identified iff |mean| > c * std
+    load_guard_c: float = 1.0   # load slot identified iff |mean| > c * std
+                                # (measured margins: prior load windows reach
+                                # |mean|/std >= 1.2, min-max scaled C-MAPSS
+                                # setting jitter stays <= 0.7)
     log_eps: float = 1e-6       # offset under the log of the operator targets
     dyn_log_mean: float = -5.0  # fixed standardisation of the log operators
     dyn_log_std: float = 2.0    # (measured ~N(-5, 2^2) across both arms)

@@ -17,9 +17,11 @@ i.e. the raw per-unit series, scaled min-max on the dev split and with
 the literature's 14-sensor selection and 125-cycle RUL cap -- the same
 cap the priors use.  Channel placement mirrors training's eval mode:
 sensors into the first process slots, op-settings 1-2 into the two load
-slots, empty slots exactly zero.  FD001's settings are near-constant, so
-after min-max scaling the load normalisation's constant guard fires and
-the load slots become the clean constant-load case of the prior.
+slots, empty slots exactly zero.  FD001's settings are recording jitter
+that min-max scaling inflates to zero-mean noise; the load
+normalisation's constant guard (its threshold sits above the jitter's
+|mean|/std, see ``WindowConfig.load_guard_c``) replaces the load slots
+by the clean constant-load case of the prior.
 """
 
 from __future__ import annotations
