@@ -36,8 +36,10 @@ divergence handling (:func:`observational_rollout`).
 from __future__ import annotations
 
 import copy
+import multiprocessing as mp
 import os
 import warnings
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -698,6 +700,34 @@ def generate_units(n: int, seed: int, hcfg: HybridConfig | None = None):
         yield u
 
 
+def _gen_one(args: tuple) -> Unit:
+    """Pool worker: one unit from its own seed (module-level for spawn)."""
+    seed, uid, hcfg = args
+    torch.set_num_threads(1)      # W workers x BLAS threads oversubscribes
+    for _ in range(50):
+        try:
+            return sample_hybrid_unit(seed, hcfg, unit_id=uid)
+        except RuntimeError:
+            seed = (seed + 999_983) % (2**31 - 1)
+    raise RuntimeError("unit infeasible after 50 rerolls -- "
+                       "config likely infeasible")
+
+
+def _parallel_units(n: int, seed: int, hcfg: HybridConfig, workers: int):
+    """Yield ``n`` units from a process pool, in index order.
+
+    Deterministic in ``seed`` (one pre-drawn seed per unit index, failed
+    draws re-roll locally), but NOT bit-identical to the sequential path,
+    where failed draws shift the master seed stream.  Spawn context on
+    every platform: identical semantics, and no fork-after-torch hazard.
+    """
+    rng = np.random.default_rng(seed)
+    tasks = [(int(rng.integers(2**31 - 1)), i, hcfg) for i in range(n)]
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(workers, mp_context=ctx) as ex:
+        yield from ex.map(_gen_one, tasks, chunksize=8)
+
+
 def _json_cfg(hcfg: HybridConfig) -> HybridConfig:
     """Copy of the config with activation modules replaced by class names,
     so the HDF5 writer can JSON-serialise it into the file attrs."""
@@ -709,20 +739,25 @@ def _json_cfg(hcfg: HybridConfig) -> HybridConfig:
 
 def write_hybrid_dataset(path: str, n: int, seed: int,
                          hcfg: HybridConfig | None = None,
-                         progress_every: int = 0) -> list[Unit]:
+                         progress_every: int = 0,
+                         workers: int = 1) -> list[Unit]:
     """Stream ``n`` hybrid units into the shared HDF5 layout.
 
     Returns the first 500 units as an in-memory probe for diagnostics.
+    ``workers > 1`` generates in a process pool (the writer stays in this
+    process); see ``_parallel_units`` for the seed semantics.
     """
     hcfg = hcfg or HybridConfig()
     n_channels = hcfg.emission.n_nodes + hcfg.n_load_channels
     probe: list[Unit] = []
+    units = (_parallel_units(n, seed, hcfg, workers) if workers > 1
+             else generate_units(n, seed, hcfg))
     # Write under a temp name and rename only on success, so a crashed
     # run never leaves a partial file that "skip if exists" would reuse
     # (issue #7).
     tmp = path + ".tmp"
     with HDF5Writer(tmp, _json_cfg(hcfg), n_sensors=n_channels) as w:
-        for k, u in enumerate(generate_units(n, seed, hcfg)):
+        for k, u in enumerate(units):
             w.append(u)
             if len(probe) < 500:
                 probe.append(u)
@@ -746,6 +781,8 @@ if __name__ == "__main__":
     ap.add_argument("--n-sensors", type=int, default=8,
                     help="observed process sensors (EmissionConfig.n_nodes)")
     ap.add_argument("--check-every", type=int, default=100)
+    ap.add_argument("--workers", type=int, default=1,
+                    help="generator processes (~ physical cores; 1 = sequential)")
     a = ap.parse_args()
 
     hcfg = HybridConfig(emission=EmissionConfig(n_nodes=a.n_sensors))
@@ -753,7 +790,8 @@ if __name__ == "__main__":
           f"({hcfg.emission.n_nodes} sensors + {hcfg.n_load_channels} load channels, "
           f"seed={a.seed})")
     probe = write_hybrid_dataset(a.out, a.n, a.seed, hcfg,
-                                 progress_every=a.check_every)
+                                 progress_every=a.check_every,
+                                 workers=a.workers)
 
     print("\nDiagnostics on the first 500 units:")
     sanity_check(probe)
