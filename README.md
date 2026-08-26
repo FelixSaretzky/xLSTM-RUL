@@ -35,4 +35,8 @@ comparable and mixable.
 uv sync
 uv run python -m rulbench.synthetic.rul_sde    --out data/sde_train.h5    --n 1000 --seed 0
 uv run python -m rulbench.synthetic.rul_hybrid --out data/hybrid_train.h5 --n 1000 --seed 0
+
+# large runs: one generator process and HDF5 file per shard, resumable;
+# training pools the shards via a glob (--train data/hybrid_train_*.h5)
+S=8 N=200000 SEED0=0 scripts/gen_shards.sh rul_hybrid hybrid_train
 ```
