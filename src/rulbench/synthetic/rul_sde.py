@@ -188,7 +188,7 @@ class TSCMPriorConfig:
     x_ceiling: float = 5.0                     # normalised ceiling (failure at 1)
     min_ramp: int = 8
     max_ramp: int = 1500
-    min_length: int = 120
+    min_length: int = 40 #120
     max_length: int = 2000
     max_retries: int = 50
     # --- observation / label ---
