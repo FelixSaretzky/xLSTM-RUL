@@ -33,11 +33,17 @@ NORMALISATION:
   index becomes a quantity that can be READ OFF the sensors, and the failure
   threshold lives on an observable scale.
 
-TWO INDEPENDENT DEGREES OF FREEDOM:
-  * onset     -- WHEN degradation starts (absolute healthy duration)
-  * operators -- HOW FAST and IN WHAT SHAPE it proceeds
-  The ramp length is EMERGENT (integration until first passage), not tied to
-  the onset.
+TWO PRIOR AXES:
+  * operators     -- HOW FAST and IN WHAT SHAPE degradation proceeds.
+                     The ramp length R is EMERGENT (integration until first
+                     passage), not set directly.
+  * healthy_frac  -- WHAT SHARE of the life is spent healthy. The onset
+                     follows as  onset = R * frac / (1 - frac), so it always
+                     matches the ramp that actually occurred.
+  Onset and ramp are therefore POSITIVELY correlated by construction, which
+  is physically sensible (a robust machine stays healthy longer AND degrades
+  more slowly). The range for frac is kept wide so that sequence length does
+  not become a shortcut predictor for RUL.
 
 Ablation switches: --no-couple (no d->sensor edges), --signature-norm free.
 """
@@ -172,7 +178,7 @@ class TSCMPriorConfig:
     season_period_range: tuple = (20, 300)
     season_amp_range: tuple = (0.05, 0.5)
     # --- degree of freedom 1: WHEN degradation starts ---
-    healthy_range: tuple = (20, 400)
+    # healthy_range: tuple = (20, 400)
     # --- degree of freedom 2: HOW FAST / IN WHAT SHAPE degradation proceeds ---
     # theta is normalised away (failure at X'=1). Its population spread is
     # absorbed into the base-rate distribution -- mathematically equivalent,
@@ -192,13 +198,17 @@ class TSCMPriorConfig:
     min_length: int = 40 #120
     max_length: int = 2000
     max_retries: int = 50
+    min_onset: int = 15
     # --- observation / label ---
     censor_prob: float = 0.3
+    rul_cap_mode: str = 'ramp' # "fixed"
     rul_cap: float = 125.0
+    rul_cap_frac: float = 0.6 
+    rul_cap_bounds: tuple = (20.0, 300.0)
     couple_hi: bool = True
-    x0_range: tuple = (0.0, 0.1)
+    x0_range: tuple = (0.0, 0.01)
     # --- Sampling Settings ---
-    healthy_frac_range = (0.05, 0.8)
+    healthy_frac_range: tuple = (0.05, 0.8)
 
 
 class TSCMGenerator:
@@ -435,6 +445,7 @@ class TSCMGenerator:
                 continue
             frac = rng.uniform(*c.healthy_frac_range)
             on = int(round(R * frac / (1.0 - frac)))
+            on = max(on, c.min_onset)
             if on + R + 1 > c.hard_cap:
                 self.n_rejected += 1 
                 continue
@@ -502,7 +513,12 @@ class TSCMGenerator:
 
         # --- (A) piecewise-linear RUL label for the baseline ---
         tt = np.arange(T)
-        rul = np.clip(t_fail - tt, 0, c.rul_cap).astype(np.float32)
+        if c.rul_cap_mode == "ramp":
+            ramp = t_fail - onset 
+            cap = float(np.clip(c.rul_cap_frac * ramp, *c.rul_cap_bounds))
+        else: 
+            cap = float(c.rul_cap)
+        rul = np.clip(t_fail - tt, 0, cap).astype(np.float32)
         # rul[:onset] = min(t_fail - onset, c.rul_cap) # Could be a leakage
 
         uid = self._next_id; self._next_id += 1
@@ -533,11 +549,15 @@ def sanity_check(units, gen=None):
     print(f"  ramp:    {ramp.min()}..{ramp.max()}   (std {ramp.std():.0f})   <- emergent")
     print(f"  length:  {ln.min()}..{ln.max()}   censored: {cen:.1%}")
     print(f"  X' end:  {hi_end.min():.2f}..{hi_end.max():.2f}")
-    print(f"  corr(onset, ramp) = {np.corrcoef(on, ramp)[0,1]:+.2f}  (near 0 = decoupled)")
+    print(f"  corr(onset, ramp) = {np.corrcoef(on, ramp)[0,1]:+.2f}  "
+      f"(positive by construction; near 1 would make length a shortcut)")    
     print(f"  mu(1)/mu(0): median {np.median(ratio):.1f}  "
           f"({np.percentile(ratio,5):.1f}..{np.percentile(ratio,95):.1f})")
     print(f"  nonlinearity of mu (rel. dev. from a straight line): "
           f"median {np.median(curv):.3f}, fraction >0.05: {np.mean(curv>0.05):.0%}")
+
+    hf = on / np.maximum(tf + 1, 1)
+    print(f"  healthy fraction: median {np.median(hf):.2f} ({np.percentile(hf,5):.2f}..{np.percentile(hf,95):.2f})")
     dsh = collections.Counter(u.shapes[0] for u in units)
     gsh = collections.Counter(u.shapes[1] for u in units)
     # Empirical health index: ||x - baseline|| at end of life (should be ~1)
