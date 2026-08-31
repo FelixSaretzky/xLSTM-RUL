@@ -187,6 +187,7 @@ class TSCMPriorConfig:
     hard_cap: int = 3000
     x_ceiling: float = 5.0                     # normalised ceiling (failure at 1)
     min_ramp: int = 8
+    min_ramp_frac: float = 0.15
     max_ramp: int = 1500
     min_length: int = 40 #120
     max_length: int = 2000
@@ -196,6 +197,8 @@ class TSCMPriorConfig:
     rul_cap: float = 125.0
     couple_hi: bool = True
     x0_range: tuple = (0.0, 0.1)
+    # --- Sampling Settings ---
+    healthy_frac_range = (0.05, 0.8)
 
 
 class TSCMGenerator:
@@ -398,13 +401,22 @@ class TSCMGenerator:
 
     def _valid(self, X, onset, t_fail):
         c = self.cfg
-        if t_fail < 0:                                    return False
-        if not np.all(np.isfinite(X)):                    return False
-        if X.max() >= c.x_ceiling * 0.99:                 return False
+        if t_fail < 0:                                    
+            return False
+        if not np.all(np.isfinite(X)):                    
+            return False
+        if X.max() >= c.x_ceiling * 0.99:                 
+            return False
         ramp = t_fail - onset
-        if ramp < c.min_ramp or ramp > c.max_ramp:        return False
-        if (t_fail + 1) < c.min_length:                   return False
-        if (t_fail + 1) > c.max_length:                   return False
+        total = t_fail + 1 
+        if ramp < max(c.min_ramp, int(c.min_ramp_frac * total)):
+            return False 
+        if ramp > c.max_ramp:        
+            return False
+        if (t_fail + 1) < c.min_length:                   
+            return False
+        if (t_fail + 1) > c.max_length:                   
+            return False
         return True
 
     # ---------------- unit ----------------
@@ -415,13 +427,23 @@ class TSCMGenerator:
         # Sample Stressor, Health Index and integrate it till it fails
         X = None; t_fail = -1; onset = 0; s = None; ops = None
         for _ in range(c.max_retries):
-            onset = int(rng.integers(*c.healthy_range))
             s_full, _ = self._stressor(c.hard_cap)
             ops = self._sample_operators()
-            Xc, tf = self._integrate_to_failure(onset, ops, s_full)
-            if self._valid(Xc, onset, tf):
-                X, t_fail, s = Xc, tf, s_full[:len(Xc)]
-                break
+            Xc, R = self._integrate_to_failure(onset, ops, s_full)
+            if R < 0:
+                self.n_rejected += 1 
+                continue
+            frac = rng.uniform(*c.healthy_frac_range)
+            on = int(round(R * frac / (1.0 - frac)))
+            if on + R + 1 > c.hard_cap:
+                self.n_rejected += 1 
+                continue
+            Xc_full = np.concatenate([np.zeros(on), Xc])
+            tf_full = on + R
+            if self._valid(Xc_full, on, tf_full):
+                X, t_fail, onset = Xc_full, tf_full, on 
+                s = s_full[:tf_full + 1]
+                break 
             self.n_rejected += 1
         if X is None:
             raise RuntimeError("No valid trajectory after max_retries -- "
