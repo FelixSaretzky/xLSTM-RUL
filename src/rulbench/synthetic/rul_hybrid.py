@@ -723,7 +723,7 @@ if __name__ == "__main__":
                     help="generator processes (~ physical cores; 1 = sequential)")
     ap.add_argument("--min-length", type=int, default=40)
     ap.add_argument("--max-length", type=int, default=2000)
-    ap.add_argument("--health-frac", type=tuple, default=(0.05, 0.8))
+    ap.add_argument("--health-frac", type=tuple, default=(0.05, 0.8), help="fraction of the initial healthy ramp")
     ap.add_argument("--min-onset", type=int, default=15)
     a = ap.parse_args()
 
