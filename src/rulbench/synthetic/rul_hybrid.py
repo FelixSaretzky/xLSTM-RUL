@@ -721,9 +721,14 @@ if __name__ == "__main__":
     ap.add_argument("--check-every", type=int, default=100)
     ap.add_argument("--workers", type=int, default=1,
                     help="generator processes (~ physical cores; 1 = sequential)")
+    ap.add_argument("--min-length", type=int, default=40)
+    ap.add_argument("--max-length", type=int, default=2000)
+    ap.add_argument("--health-frac", type=tuple, default=(0.05, 0.8))
+    ap.add_argument("--min-onset", type=int, default=15)
     a = ap.parse_args()
 
-    hcfg = HybridConfig(emission=EmissionConfig(n_nodes=a.n_sensors))
+    hcfg = HybridConfig(emission=EmissionConfig(n_nodes=a.n_sensors),
+                        latent=LatentConfig(min_length=a.min_length, max_length=a.max_length, healthy_frac_range=a.health_frac, min_onset=a.min_onset))
     print(f"Generating {a.n} hybrid units -> {a.out}  "
           f"({hcfg.emission.n_nodes} sensors + {hcfg.n_load_channels} load channels, "
           f"seed={a.seed})")
