@@ -527,42 +527,7 @@ class TSCMGenerator:
             s[t] = max(0.1, 1.0 + 0.4 * z + season)
         return s, dict(rho=rho, seasonal=seasonal, period=per, amp=amp)
 
-    # ---------------- SDE ----------------
-    def _sample_operators(self):
-        """Draw base rates AND shapes -> two separate prior axes."""
-        rng = self.rng
-        c = self.cfg.sensors
 
-        mu0 = float(_loguniform(rng, *c.drift_base_range))
-        sg0 = float(_loguniform(rng, *c.diff_base_range))
-        dname, f = sample_shape(rng, str(rng.choice(c.drift_shapes)))
-        gk = str(rng.choice(c.diff_shapes))
-        gname, g = constant_shape() if gk == "constant" else sample_shape(rng, gk)
-        lo, hi = c.shape_clip
-        mu = lambda x, f=f, mu0=mu0: mu0 * np.clip(f(x), lo, hi)
-        sg = lambda x, g=g, sg0=sg0: sg0 * np.clip(g(x), lo, hi)
-        return dict(mu=mu, sigma=sg, shapes=(dname, gname))
-
-
-    def _valid(self, X, onset, t_fail):
-        c = self.cfg.sensors
-        if t_fail < 0:                                    
-            return False
-        if not np.all(np.isfinite(X)):                    
-            return False
-        if X.max() >= c.x_ceiling * 0.99:                 
-            return False
-        ramp = t_fail - onset
-        total = t_fail + 1 
-        if ramp < max(c.min_ramp, int(c.min_ramp_frac * total)):
-            return False 
-        if ramp > c.max_ramp:        
-            return False
-        if (t_fail + 1) < c.min_length:                   
-            return False
-        if (t_fail + 1) > c.max_length:                   
-            return False
-        return True
 
     # ---------------- unit ----------------
     def sample_unit(self) -> Unit:
