@@ -56,7 +56,7 @@ from dotime.temporal_scm import TemporalSCM
 from dotime.temporal_scm_builder import TemporalSCMBuilder
 
 from rulbench.dataset_io import HDF5Writer, Unit, gen_grid
-from rulbench.synthetic.rul_sde import TSCMGenerator, TSCMPriorConfig
+from rulbench.synthetic.rul_sde import LatentConfig, sample_latent_block, rul_label
 
 DRIVER_HEALTH = "H"
 DRIVER_LOAD = "S"
@@ -530,82 +530,14 @@ class HybridConfig:
     observability is inside the prior support.
     """
 
-    latent: TSCMPriorConfig = field(default_factory=TSCMPriorConfig)
+    latent: LatentConfig = field(default_factory=LatentConfig)
     emission: EmissionConfig = field(default_factory=EmissionConfig)
     burn_in: int = 50
-    rul_cap: float = 125.0
-    censor_prob: float = 0.3
-    x0_range: tuple = (0.0, 0.1)
     n_load_channels: int = 2
     load_gain_log_sigma: float = 0.3
     load_noise_range: tuple = (1e-3, 0.15)
     max_emission_scms: int = 3       # fresh emission SCMs per latent draw
     max_emission_retries: int = 5    # noise re-rolls per emission SCM (F12)
-
-
-def _stationary_load(total_T: int, rng, lcfg) -> np.ndarray:
-    """The sibling generator's load process with a stationary AR(1) start."""
-    rho = float(rng.uniform(*lcfg.stressor_rho_range))
-    z = float(rng.standard_normal())  # stationary init (not z=0)
-    seasonal = rng.random() < lcfg.p_seasonal
-    per = float(rng.uniform(*lcfg.season_period_range)) if seasonal else 1.0
-    amp = float(rng.uniform(*lcfg.season_amp_range)) if seasonal else 0.0
-    pha = float(rng.uniform(0.0, 2.0 * np.pi))
-    s = np.empty(total_T, dtype=np.float32)
-    for t in range(total_T):
-        z = rho * z + np.sqrt(1.0 - rho**2) * rng.standard_normal()
-        season = amp * np.sin(2.0 * np.pi * t / per + pha) if seasonal else 0.0
-        s[t] = max(0.1, 1.0 + 0.4 * z + season)
-    return s
-
-
-def _integrate_latent(x0, onset, ops, s, rng, lcfg):
-    """Euler-Maruyama from X'(0..onset) = x0, first passage at X' >= 1.
-
-    ``s`` is the load in emitted coordinates (post burn-in); mirrors the
-    sibling's ``_integrate_to_failure`` (dt = 1, load-modulated drift,
-    clipped state) plus the initial-health offset.
-    """
-    X = np.full(len(s), np.float32(x0))
-    for t in range(onset + 1, len(s)):
-        x = float(X[t - 1])
-        x = x + s[t - 1] * float(ops["mu"](x)) + float(ops["sigma"](x)) * rng.standard_normal()
-        x = min(max(x, 0.0), lcfg.x_ceiling)
-        X[t] = np.float32(x)
-        if x >= 1.0:
-            return X[:t + 1], t
-    return X, -1
-
-
-def _sample_latent(gen: TSCMGenerator, hcfg: HybridConfig):
-    """One valid latent draw: (X'_window, s_full, onset, t_fail, censored, x0, ops)."""
-    lcfg = gen.cfg
-    for _ in range(lcfg.max_retries):
-        x0 = float(gen.rng.uniform(*hcfg.x0_range))
-        onset = int(gen.rng.integers(*lcfg.healthy_range))
-        s_full = _stationary_load(hcfg.burn_in + lcfg.hard_cap, gen.rng, lcfg)
-        ops = gen._sample_operators()
-        X, t_fail = _integrate_latent(x0, onset, ops, s_full[hcfg.burn_in:], gen.rng, lcfg)
-        if t_fail < 0 or not np.all(np.isfinite(X)):
-            continue
-        if float(X.max()) >= lcfg.x_ceiling * 0.99:
-            continue
-        ramp = t_fail - onset
-        if not (lcfg.min_ramp <= ramp <= lcfg.max_ramp):
-            continue
-        if not (lcfg.min_length <= t_fail + 1 <= lcfg.max_length):
-            continue
-        T = t_fail + 1
-        censored = False
-        if gen.rng.random() < hcfg.censor_prob and (onset + lcfg.min_ramp) < t_fail:
-            lo = max(onset + lcfg.min_ramp, lcfg.min_length)
-            if lo < t_fail:
-                T = int(gen.rng.integers(lo, t_fail))
-                censored = True
-        return X[:T], s_full[:hcfg.burn_in + T], onset, t_fail, censored, x0, ops
-    raise RuntimeError(
-        "no valid latent draw within max_retries -- check the latent config "
-        "(drift/diffusion ranges vs ramp/length bounds)")
 
 
 def sample_hybrid_unit(seed: int, hcfg: HybridConfig | None = None,
@@ -620,12 +552,19 @@ def sample_hybrid_unit(seed: int, hcfg: HybridConfig | None = None,
     """
     hcfg = hcfg or HybridConfig()
     rng = np.random.default_rng(seed)
-    gen = TSCMGenerator(hcfg.latent, seed=int(rng.integers(2**31 - 1)))
-    X_win, s_full, onset, t_fail, censored, x0, ops = _sample_latent(gen, hcfg)
-    T = len(X_win)
 
-    health_carrier = np.concatenate(
-        [np.full(hcfg.burn_in, np.float32(x0)), X_win])
+    d = sample_latent_block(rng, hcfg.latent, load_burn_in=hcfg.burn_in)
+    T = len(d.hi)
+
+
+
+
+    # gen = TSCMGenerator(hcfg.latent, seed=int(rng.integers(2**31 - 1)))
+    # X_win, s_full, onset, t_fail, censored, x0, ops = _sample_latent(gen, hcfg)
+    # T = len(X_win)
+
+    health_carrier = np.concatenate([np.zeros(hcfg.burn_in, np.float32), d.hi])
+    s_full = np.concatenate([d.load_prefix, d.load])
     out = None
     for _scm_try in range(hcfg.max_emission_scms):
         try:
@@ -653,30 +592,29 @@ def sample_hybrid_unit(seed: int, hcfg: HybridConfig | None = None,
     sensors = out[:, obs_cols].numpy().astype(np.float32)
 
     # dedicated noisy load channels (multiplicative gain, no offset)
-    s_win = s_full[hcfg.burn_in:]
     gain = np.exp(rng.normal(0.0, hcfg.load_gain_log_sigma, hcfg.n_load_channels))
     lo, hi = np.log(hcfg.load_noise_range[0]), np.log(hcfg.load_noise_range[1])
     lnz = np.exp(rng.uniform(lo, hi, hcfg.n_load_channels))
-    L = gain * s_win[:, None] + lnz * rng.standard_normal((T, hcfg.n_load_channels))
+    L = gain * d.load[:, None] + lnz * rng.standard_normal((T, hcfg.n_load_channels))
     sensors = np.concatenate([sensors, L.astype(np.float32)], axis=1)
 
     # piecewise-linear label, family-free GLOBAL cap (C-MAPSS convention,
     # no pre-onset plateau special-casing)
-    rul = np.clip(t_fail - np.arange(T), 0, hcfg.rul_cap).astype(np.float32)
+    rul = rul_label(hcfg.latent, d.t_fail, T, d.onset)
 
     gg = gen_grid()
-    mu_grid = np.asarray(ops["mu"](gg), dtype=np.float32)
-    sg_grid = np.asarray(ops["sigma"](gg), dtype=np.float32)
+    mu_grid = np.asarray(d.ops["mu"](gg), dtype=np.float32)
+    sg_grid = np.asarray(d.ops["sigma"](gg), dtype=np.float32)
     A = np.stack([np.ones_like(gg), gg], 1)
     (a0, a1), *_ = np.linalg.lstsq(A, mu_grid, rcond=None)
     (b0, b1), *_ = np.linalg.lstsq(A, sg_grid, rcond=None)
     params = np.array([max(a0, 1e-6), max(a1, 1e-6),
                        max(b0, 1e-6), max(b1, 1e-6)], dtype=np.float32)
 
-    return Unit(sensors=sensors, hi=X_win.astype(np.float32), onset=onset,
-                t_fail=int(t_fail), rul=rul, censored=bool(censored),
+    return Unit(sensors=sensors, hi=d.hi, onset=d.onset,
+                t_fail=d.t_fail, rul=rul, censored=d.censored,
                 unit_id=unit_id, mu_grid=mu_grid, sigma_grid=sg_grid,
-                params=params, shapes=ops["shapes"],
+                params=params, shapes=d.ops["shapes"],
                 n_process=len(obs_cols))
 
 

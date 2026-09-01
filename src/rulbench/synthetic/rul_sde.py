@@ -49,7 +49,7 @@ Ablation switches: --no-couple (no d->sensor edges), --signature-norm free.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field 
 import argparse
 import numpy as np
 
@@ -62,7 +62,7 @@ def _loguniform(rng, lo, hi, size=None):
 
 def total_channels(cfg) -> int:
     """Observed dimensionality = process sensors + load channels."""
-    return cfg.n_sensors + cfg.n_load_channels
+    return cfg.sensors.n_sensors + cfg.sensors.n_load_channels
 
 
 # =====================================================================
@@ -125,98 +125,245 @@ def constant_shape():
 
 
 @dataclass
-class TSCMPriorConfig:
-    n_sensors: int = 8
-    # --- sensor graph ---
-    graph_type: str = "mixed"                  # none | chain | dag | hub | mixed
-    edge_density_range: tuple = (0.05, 0.5)    # nur "dag": Dichte pro Unit
-    edge_weight_scale: float = 0.5
-    self_ar_range: tuple = (0.0, 0.6)
-    # --- node distributions (observation model) ---
-    noise_families: tuple = ("gauss", "student_t", "skewed")
-    student_df_range: tuple = (2.5, 15.0)
-    skew_range: tuple = (0.2, 0.7)   # sg=1.0 would be extreme (kurtosis ~50)
-    # NOISE LEVEL as a calibrated quantity: what is drawn is the TOTAL NORM of
-    # the noise vector. With signature_norm="unit" (signature norm = 1) this
-    # makes  SNR at end of life = 1 / ||sigma||  an explicit, log-uniform prior
-    # axis (roughly 2.5 .. 50). Previously noise_scale was a fixed 0.3 per
-    # channel -> ||sigma|| ~ 0.85 at 8 sensors, i.e. SNR ~ 1: the signature
-    # drowned in the noise (measured).
-    noise_norm_range: tuple = (0.02, 0.4)
-    noise_scale: float = 0.3                   # only used for signature_norm="free"
-    sensor_clip: float = 50.0
-    nonlinearities: tuple = ("tanh", "relu", "sin", "identity")
-    # --- signature (degradation -> sensor) ---
-    p_signature: float = 0.6
-    signature_modes: tuple = ("location", "scale", "both")
-    sig_scale_gain_range: tuple = (0.1, 3.0)   # variance factor at end of life
-    # SIGNATURE NORMALISATION -- makes the state READABLE from the sensors:
-    #   "unit": amplitudes are scaled so that the deterministic sensor
-    #           excursion between X'=0 and X'=1 has norm 1. Then
-    #           ||x(t) - baseline|| = X'(t) -- the health index is computable
-    #           from the sensors, and the threshold X'=1 lives on an
-    #           observable scale.
-    #   "free": earlier behaviour (A ~ N(0,1) independently) -> X' only weakly
-    #           identifiable through the prior. Kept as an ablation.
-    signature_norm: str = "unit"               # "unit" | "free"
-    # Signature sensors only get shape-preserving nonlinearities so the norm
-    # relation is not destroyed inside the generator (relu can clip the
-    # signature away, sin makes it ambiguous).
-    signature_nl: tuple = ("identity", "tanh")
-    # --- stressor / load ---
-    # DEDICATED LOAD CHANNELS: operating load is recorded on real machines
-    # (speed, setpoints, power). Treating it as unknown would be needlessly
-    # pessimistic -- and load otherwise distorts the drift without the model
-    # being able to correct for it. The channels sit at the BACK of the sensor
-    # matrix: sensors[:, :n_sensors] = process, [:, n_sensors:] = load.
-    n_load_channels: int = 2
-    load_gain_log_sigma: float = 0.3           # channel gain (log-normal around 1)
-    load_noise_range: tuple = (0.01, 0.15)     # measurement noise of load channels
-    p_stressor_obs: float = 0.3                # additionally: load leaking into process sensors
-    stressor_rho_range: tuple = (0.5, 0.98)    # PER UNIT
+class LatentConfig:
+    """Everything that defines a TRAJECTORY -- shared by both prior arms.
+
+    No sensor, no graph, no observation model. If a field does not affect
+    X'(t), s(t), the onset or the failure time, it does not belong here.
+    """
+    # --- SDE operators ---
+    dt: float = 1.0
+    drift_base_range: tuple = (3e-4, 0.08)       # mu(0)
+    diff_base_range: tuple = (3e-4, 0.10)        # sigma(0)
+    drift_shapes: tuple = DRIFT_SHAPES
+    diff_shapes: tuple = DIFF_SHAPES
+    shape_clip: tuple = (0.05, 200.0)
+    x0_range: tuple = (0.0, 0.01)                # initial damage at the onset
+    # --- load / stressor ---
+    stressor_rho_range: tuple = (0.5, 0.98)      # per unit
     p_seasonal: float = 0.5
     season_period_range: tuple = (20, 300)
     season_amp_range: tuple = (0.05, 0.5)
-    # --- degree of freedom 1: WHEN degradation starts ---
-    # healthy_range: tuple = (20, 400)
-    # --- degree of freedom 2: HOW FAST / IN WHAT SHAPE degradation proceeds ---
-    # theta is normalised away (failure at X'=1). Its population spread is
-    # absorbed into the base-rate distribution -- mathematically equivalent,
-    # since only the state-to-threshold ratio is identifiable anyway.
-    dt: float = 1.0
-    drift_base_range: tuple = (3e-4, 0.08)     # mu(0)
-    diff_base_range: tuple = (3e-4, 0.10)      # sigma(0)
-    drift_shapes: tuple = DRIFT_SHAPES
-    diff_shapes: tuple = DIFF_SHAPES
-    shape_clip: tuple = (0.05, 200.0)          # numerical bounds on f(x)
-    # --- safeguards / rejection ---
+    # --- onset policy (follows the emergent ramp) ---
+    healthy_frac_range: tuple = (0.05, 0.8)
+    min_onset: int = 15
+    # --- validity / rejection ---
     hard_cap: int = 3000
-    x_ceiling: float = 5.0                     # normalised ceiling (failure at 1)
+    x_ceiling: float = 5.0
     min_ramp: int = 8
     min_ramp_frac: float = 0.15
     max_ramp: int = 1500
-    min_length: int = 40 #120
+    min_length: int = 40
     max_length: int = 2000
     max_retries: int = 50
-    min_onset: int = 15
-    # --- observation / label ---
+    # --- observation window / label ---
     censor_prob: float = 0.3
-    rul_cap_mode: str = 'ramp' # "fixed"
-    rul_cap: float = 125.0
-    rul_cap_frac: float = 0.6 
+    rul_cap_mode: str = "ramp"                   # "fixed" | "ramp"
+    rul_cap: float = 125.0                       # used when mode == "fixed"
+    rul_cap_frac: float = 0.6
     rul_cap_bounds: tuple = (20.0, 300.0)
-    couple_hi: bool = True
-    x0_range: tuple = (0.0, 0.01)
-    # --- Sampling Settings ---
-    healthy_frac_range: tuple = (0.05, 0.8)
 
+
+@dataclass
+class SensorConfig:
+    """The hand-built emission model of the rul_sde arm.
+
+    The hybrid arm replaces this entire block with a dotime TemporalSCM;
+    none of these fields are read there.
+    """
+    n_sensors: int = 8
+    sensor_burn_in: int = 50
+    graph_type: str = "mixed"                    # none|chain|dag|hub|mixed
+    edge_density_range: tuple = (0.05, 0.5)
+    edge_weight_scale: float = 0.5
+    self_ar_range: tuple = (0.0, 0.6)
+    noise_families: tuple = ("gauss", "student_t", "skewed")
+    student_df_range: tuple = (2.5, 15.0)
+    skew_range: tuple = (0.2, 0.7)
+    noise_norm_range: tuple = (0.02, 0.4)
+    noise_scale: float = 0.3                     # only for signature_norm="free"
+    sensor_clip: float = 50.0
+    nonlinearities: tuple = ("tanh", "relu", "sin", "identity")
+    p_signature: float = 0.6
+    signature_modes: tuple = ("location", "scale", "both")
+    sig_scale_gain_range: tuple = (0.1, 3.0)
+    signature_norm: str = "unit"                 # "unit" | "free"
+    signature_nl: tuple = ("identity", "tanh")
+    couple_hi: bool = True
+    n_load_channels: int = 2
+    load_gain_log_sigma: float = 0.3
+    load_noise_range: tuple = (1e-3, 0.15)
+    p_stressor_obs: float = 0.3
+
+
+@dataclass
+class TSCMPriorConfig:
+    """Container for the rul_sde arm. `asdict` still serialises cleanly
+    into the HDF5 attrs (nested dataclasses are handled recursively)."""
+    latent: LatentConfig = field(default_factory=LatentConfig)
+    sensors: SensorConfig = field(default_factory=SensorConfig)
+
+
+def sample_operators(rng, lcfg: LatentConfig) -> dict:
+    """Base rates AND shapes -> two separate prior axes."""
+    mu0 = float(_loguniform(rng, *lcfg.drift_base_range))
+    sg0 = float(_loguniform(rng, *lcfg.diff_base_range))
+    dname, f = sample_shape(rng, str(rng.choice(lcfg.drift_shapes)))
+    gk = str(rng.choice(lcfg.diff_shapes))
+    gname, g = constant_shape() if gk == "constant" else sample_shape(rng, gk)
+    lo, hi = lcfg.shape_clip
+    return dict(mu=lambda x, f=f, m=mu0: m * np.clip(f(x), lo, hi),
+                sigma=lambda x, g=g, s=sg0: s * np.clip(g(x), lo, hi),
+                shapes=(dname, gname))
+
+
+def sample_load(rng, lcfg: LatentConfig, T: int) -> np.ndarray:
+    """AR(1) load with per-unit rho, optional seasonality.
+
+    Starts from the STATIONARY distribution N(0,1): a z=0 start would leave
+    the variance building up as 1 - rho^(2t), so at rho=0.98 the load would
+    be four times too calm for ~74 steps -- exactly the healthy phase from
+    which the baseline noise is estimated.
+    """
+    rho = float(rng.uniform(*lcfg.stressor_rho_range))
+    z = float(rng.standard_normal())
+    seasonal = rng.random() < lcfg.p_seasonal
+    per = float(rng.uniform(*lcfg.season_period_range)) if seasonal else 1.0
+    amp = float(rng.uniform(*lcfg.season_amp_range)) if seasonal else 0.0
+    pha = float(rng.uniform(0.0, 2.0 * np.pi))
+    s = np.empty(T, dtype=np.float64)
+    for t in range(T):
+        z = rho * z + np.sqrt(1.0 - rho ** 2) * rng.standard_normal()
+        season = amp * np.sin(2.0 * np.pi * t / per + pha) if seasonal else 0.0
+        s[t] = max(0.1, 1.0 + 0.4 * z + season)
+    return s
+
+
+def integrate_to_failure(rng, lcfg: LatentConfig, onset: int, ops: dict,
+                         s: np.ndarray, x0: float):
+    """
+    Euler-Maruyama in the NORMALISED state space
+    """
+    dt, sq = lcfg.dt, np.sqrt(lcfg.dt)
+    n = min(len(s), lcfg.hard_cap)
+    X = np.full(n, x0)
+    for t in range(onset + 1, n):
+        x = X[t - 1]
+        x = x + s[t - 1] * float(ops["mu"](x)) * dt \
+              + float(ops["sigma"](x)) * sq * rng.standard_normal()
+        x = min(max(x, 0.0), lcfg.x_ceiling)     # reflecting at 0, safety ceiling
+        X[t] = x
+        if x >= 1.0:
+            return X[:t + 1], t
+    return X, -1
+
+
+def is_valid(lcfg: LatentConfig, X, onset: int, t_fail: int) -> bool:
+    if t_fail < 0 or not np.all(np.isfinite(X)):
+        return False
+    if X.max() >= lcfg.x_ceiling * 0.99:
+        return False
+    ramp, total = t_fail - onset, t_fail + 1
+    if ramp < max(lcfg.min_ramp, int(lcfg.min_ramp_frac * total)):
+        return False
+    if ramp > lcfg.max_ramp:
+        return False
+    return lcfg.min_length <= total <= lcfg.max_length
+
+
+def rul_label(lcfg: LatentConfig, t_fail: int, T: int, onset: int) -> np.ndarray:
+    """Piecewise-linear RUL label """
+    if lcfg.rul_cap_mode == "ramp":
+        cap = float(np.clip(lcfg.rul_cap_frac * (t_fail - onset), *lcfg.rul_cap_bounds))
+    else:
+        cap = float(lcfg.rul_cap)
+    return np.clip(t_fail - np.arange(T), 0, cap).astype(np.float32)
+
+
+@dataclass
+class LatentDraw:
+    """One valid latent block. Both arms consume this record, so onset
+    policy, validity bounds and censoring cannot drift apart between them."""
+    hi: np.ndarray            # (T,) X' over the observation window
+    load: np.ndarray          # (T,) load in window coordinates
+    load_prefix: np.ndarray   # (load_burn_in,) load before the window
+    onset: int
+    t_fail: int               # beyond T when censored
+    censored: bool
+    ops: dict
+    x0: float
+
+
+def sample_latent_block(rng, lcfg: LatentConfig, load_burn_in: int = 0,
+                        stats: dict | None = None) -> LatentDraw:
+    """Draw one valid latent block: operators, load, first passage, censoring.
+
+    TWO-PASS INTEGRATION. Pass 1 runs with onset = 0 to obtain the emergent
+    ramp length R. The healthy duration then follows as
+    onset = R * frac / (1 - frac), so it always matches the ramp that
+    actually occurred. Pass 2 re-integrates with that onset in place, on the
+    SAME load path -- which is why a prefix cannot simply be concatenated
+    after pass 1: degradation and sensors would end up driven by two
+    uncorrelated realisations of the same process.
+
+    Pass 2 draws fresh noise, so the realised healthy fraction deviates
+    slightly from the drawn frac. That is expected; frac is a prior axis,
+    not an exact target.
+    """
+    def _rej(reason):
+        if stats is not None:
+            stats[reason] = stats.get(reason, 0) + 1
+
+    need = load_burn_in + lcfg.hard_cap
+    for _ in range(lcfg.max_retries):
+        s_full = sample_load(rng, lcfg, need)
+        s_pre, s_win = s_full[:load_burn_in], s_full[load_burn_in:]
+        ops = sample_operators(rng, lcfg)
+        x0 = float(rng.uniform(*lcfg.x0_range))
+
+        _, R = integrate_to_failure(rng, lcfg, 0, ops, s_win, x0)   # pass 1
+        if R < 0:
+            _rej("no_failure"); continue
+
+        frac = rng.uniform(*lcfg.healthy_frac_range)
+        onset = max(int(round(R * frac / (1.0 - frac))), lcfg.min_onset)
+        if onset + R + 1 > lcfg.hard_cap:
+            _rej("onset_overruns_cap"); continue
+
+        X, t_fail = integrate_to_failure(rng, lcfg, onset, ops, s_win, x0)  # pass 2
+        if t_fail < 0:
+            _rej("no_failure"); continue
+        X[:onset] = 0.0        # healthy phase is exactly 0; x0 sits at X[onset]
+
+        if not is_valid(lcfg, X, onset, t_fail):
+            _rej("invalid"); continue
+
+        T = t_fail + 1
+        censored = False
+        if rng.random() < lcfg.censor_prob and (onset + lcfg.min_ramp) < t_fail:
+            lo = max(onset + lcfg.min_ramp, lcfg.min_length)
+            if lo < t_fail:
+                T = int(rng.integers(lo, t_fail)); censored = True
+
+        return LatentDraw(hi=X[:T].astype(np.float32),
+                          load=s_win[:T].astype(np.float32),
+                          load_prefix=s_pre.astype(np.float32),
+                          onset=onset, t_fail=int(t_fail),
+                          censored=censored, ops=ops, x0=x0)
+
+    raise RuntimeError("No valid latent draw within max_retries -- check the "
+                       "latent config (drift/diffusion ranges vs ramp bounds).")
 
 class TSCMGenerator:
-    def __init__(self, cfg: TSCMPriorConfig, seed: int | None = None):
+    def __init__(self, cfg: TSCMPriorConfig, seed=None):
         self.cfg = cfg
         self.rng = np.random.default_rng(seed)
         self._next_id = 0
-        self.n_rejected = 0
+        self.rejections: dict[str, int] = {}
+    
+    @property
+    def n_rejected(self) -> int:
+        return sum(self.rejections.values())
 
     # ---------------- node mechanism ----------------
     @staticmethod
@@ -242,7 +389,8 @@ class TSCMGenerator:
 
     # ---------------- graph ----------------
     def _sample_graph(self):
-        c, rng = self.cfg, self.rng
+        rng = self.rng
+        c = self.cfg.sensors
         n = c.n_sensors
         order = rng.permutation(n)
         W = np.zeros((n, n))                            # W[i,j]: j -> i (instantan)
@@ -321,7 +469,9 @@ class TSCMGenerator:
         """Per-channel noise levels. With "unit" the TOTAL NORM is drawn, so that
         the signal-to-noise ratio at end of life is a controlled prior axis
         instead of a by-product of fixed constants."""
-        c, rng = self.cfg, self.rng
+        rng = self.rng
+        c = self.cfg.sensors
+
         w = 0.5 + rng.random(n)                       # relative weighting
         if c.signature_norm != "unit":
             return c.noise_scale * w
@@ -361,7 +511,9 @@ class TSCMGenerator:
     # ---------------- stressor: rho per unit + seasonality ----------------
     # External pressure on the system, sampled per sensor group
     def _stressor(self, T):
-        c, rng = self.cfg, self.rng
+        rng = self.rng
+        c = self.cfg.sensors
+
         rho = float(rng.uniform(*c.stressor_rho_range))
         z = float(rng.standard_normal())
         s = np.empty(T)
@@ -378,7 +530,9 @@ class TSCMGenerator:
     # ---------------- SDE ----------------
     def _sample_operators(self):
         """Draw base rates AND shapes -> two separate prior axes."""
-        c, rng = self.cfg, self.rng
+        rng = self.rng
+        c = self.cfg.sensors
+
         mu0 = float(_loguniform(rng, *c.drift_base_range))
         sg0 = float(_loguniform(rng, *c.diff_base_range))
         dname, f = sample_shape(rng, str(rng.choice(c.drift_shapes)))
@@ -389,28 +543,9 @@ class TSCMGenerator:
         sg = lambda x, g=g, sg0=sg0: sg0 * np.clip(g(x), lo, hi)
         return dict(mu=mu, sigma=sg, shapes=(dname, gname))
 
-    def _integrate_to_failure(self, onset, ops, s):
-        """Euler-Maruyama in the NORMALISED state space: failure at X' >= 1."""
-        c, rng = self.cfg, self.rng
-        dt, sq = c.dt, np.sqrt(c.dt) 
-        x0 = float(rng.uniform(*c.x0_range))       # e.g. (0.0, 0.1) in threshold units
-        X = np.full(c.hard_cap, x0)
-        #X = np.zeros(c.hard_cap)
-        for t in range(onset + 1, c.hard_cap):
-            x = X[t - 1]
-            mu = s[t-1] * float(ops["mu"](x))
-            sig = float(ops["sigma"](x))
-            x = x + mu * dt + sig * sq * rng.normal()
-            # Protection from exploding errors
-            x = min(max(x, 0.0), c.x_ceiling)
-            X[t] = x
-            # Integrate until First-Passage Step
-            if x >= 1.0:
-                return X[:t + 1], t
-        return X, -1
 
     def _valid(self, X, onset, t_fail):
-        c = self.cfg
+        c = self.cfg.sensors
         if t_fail < 0:                                    
             return False
         if not np.all(np.isfinite(X)):                    
@@ -431,103 +566,54 @@ class TSCMGenerator:
 
     # ---------------- unit ----------------
     def sample_unit(self) -> Unit:
-        c, rng = self.cfg, self.rng
-        n = c.n_sensors
+        sc, lc, rng = self.cfg.sensors, self.cfg.latent, self.rng
+        n, B = sc.n_sensors, sc.sensor_burn_in
 
-        # Sample Stressor, Health Index and integrate it till it fails
-        X = None; t_fail = -1; onset = 0; s = None; ops = None
-        for _ in range(c.max_retries):
-            s_full, _ = self._stressor(c.hard_cap)
-            ops = self._sample_operators()
-            Xc, R = self._integrate_to_failure(onset, ops, s_full)
-            if R < 0:
-                self.n_rejected += 1 
-                continue
-            frac = rng.uniform(*c.healthy_frac_range)
-            on = int(round(R * frac / (1.0 - frac)))
-            on = max(on, c.min_onset)
-            if on + R + 1 > c.hard_cap:
-                self.n_rejected += 1 
-                continue
-            Xc_full = np.concatenate([np.zeros(on), Xc])
-            tf_full = on + R
-            if self._valid(Xc_full, on, tf_full):
-                X, t_fail, onset = Xc_full, tf_full, on 
-                s = s_full[:tf_full + 1]
-                break 
-            self.n_rejected += 1
-        if X is None:
-            raise RuntimeError("No valid trajectory after max_retries -- "
-                               "check hyperprior ranges (base rates vs. shapes?).")
+        d = sample_latent_block(rng, lc, load_burn_in=B, stats=self.rejections)
+        T = len(d.hi)
 
-        # --- observation window: post-failure is discarded ---
-        # Censoring the synthesized set
-        T = t_fail + 1
-        censored = False
-        if rng.random() < c.censor_prob and (onset + c.min_ramp) < t_fail:
-            lo = max(onset + c.min_ramp, c.min_length)
-            if lo < t_fail:
-                T = int(rng.integers(lo, t_fail)); censored = True
-        X = X[:T]; s = s[:T]
-
-        # --- sensors: DBN evaluation, signature via X' ---
-        # Signature is used as an influence on the 
+        # --- sensors: DBN rollout with a burn-in prefix at X' = 0 ---
         g = self._sample_graph()
-        x = np.zeros((T, n)); clip = c.sensor_clip
-        for t in range(T):
+        X_ext = np.concatenate([np.zeros(B), d.hi])
+        s_ext = np.concatenate([d.load_prefix, d.load])
+        x = np.zeros((B + T, n))
+        for t in range(B + T):
             xp = x[t - 1] if t > 0 else np.zeros(n)
-            for i in g["order"]:                          # topology order
-                # Here is the topology used to get the location of the node in the graph
-                mean = (g["W"][i] @ x[t]                  # intra-slice
-                        + g["self_ar"][i] * xp[i]         # inter-slice
-                        + g["A_loc"][i] * X[t]            # location signature
-                        + g["w_str"][i] * s[t])           # stressor
-                scale = g["noise"][i] * (1.0 + g["g_scl"][i] * X[t])   # scale signature
+            for i in g["order"]:
+                mean = (g["W"][i] @ x[t] + g["self_ar"][i] * xp[i]
+                        + g["A_loc"][i] * X_ext[t] + g["w_str"][i] * s_ext[t])
+                scale = g["noise"][i] * (1.0 + g["g_scl"][i] * X_ext[t])
                 eps = self._noise_draw(g["fam"][i], g["fpar"][i])
-                x[t, i] = np.clip(self._nl(g["nl"][i], mean) + scale * eps, -clip, clip)
-        # --- load channels: direct, noisy observation of s(t) ---
-        # Purely multiplicative (no offset) so that L/mean(L) ~ s/mean(s) and a
-        # model can read the relative load without calibration.
-        if c.n_load_channels > 0:
-            gain = np.exp(rng.normal(0.0, c.load_gain_log_sigma, c.n_load_channels))
-            lnz = _loguniform(rng, *c.load_noise_range, size=c.n_load_channels)
-            L = (gain * s[:, None]
-                 + lnz * rng.normal(size=(T, c.n_load_channels)))
-            x = np.concatenate([x, L.astype(np.float64)], axis=1)
+                x[t, i] = np.clip(self._nl(g["nl"][i], mean) + scale * eps,
+                                  -sc.sensor_clip, sc.sensor_clip)
+        x = x[B:]
+
+        if sc.n_load_channels > 0:
+            gain = np.exp(rng.normal(0.0, sc.load_gain_log_sigma, sc.n_load_channels))
+            lnz = _loguniform(rng, *sc.load_noise_range, size=sc.n_load_channels)
+            L = gain * d.load[:, None] + lnz * rng.normal(size=(T, sc.n_load_channels))
+            x = np.concatenate([x, L], axis=1)
 
         if not np.all(np.isfinite(x)):
             return self.sample_unit()
 
-        # --- store the operators on the fine generator grid (targets) ---
         gg = gen_grid()
-        mu_grid = np.asarray(ops["mu"](gg), dtype=np.float32)
-        sg_grid = np.asarray(ops["sigma"](gg), dtype=np.float32)
-
-        # --- best LINEAR fit -> parametric ablation (deliberately
-        #     misspecified as soon as the shape is nonlinear) ---
+        mu_grid = np.asarray(d.ops["mu"](gg), dtype=np.float32)
+        sg_grid = np.asarray(d.ops["sigma"](gg), dtype=np.float32)
         A = np.stack([np.ones_like(gg), gg], 1)
         (a0, a1), *_ = np.linalg.lstsq(A, mu_grid, rcond=None)
         (b0, b1), *_ = np.linalg.lstsq(A, sg_grid, rcond=None)
         params = np.array([max(a0, 1e-6), max(a1, 1e-6),
                            max(b0, 1e-6), max(b1, 1e-6)], dtype=np.float32)
 
-        # --- (A) piecewise-linear RUL label for the baseline ---
-        tt = np.arange(T)
-        if c.rul_cap_mode == "ramp":
-            ramp = t_fail - onset 
-            cap = float(np.clip(c.rul_cap_frac * ramp, *c.rul_cap_bounds))
-        else: 
-            cap = float(c.rul_cap)
-        rul = np.clip(t_fail - tt, 0, cap).astype(np.float32)
-        # rul[:onset] = min(t_fail - onset, c.rul_cap) # Could be a leakage
-
         uid = self._next_id; self._next_id += 1
-        return Unit(sensors=x.astype(np.float32), hi=X.astype(np.float32),
-                    onset=int(onset), t_fail=int(t_fail), rul=rul,
-                    censored=bool(censored), unit_id=uid,
+        return Unit(sensors=x.astype(np.float32), hi=d.hi,
+                    onset=d.onset, t_fail=d.t_fail,
+                    rul=rul_label(lc, d.t_fail, T, d.onset),
+                    censored=d.censored, unit_id=uid,
                     mu_grid=mu_grid, sigma_grid=sg_grid,
-                    params=params, shapes=ops["shapes"],
-                    n_process=int(c.n_sensors))
+                    params=params, shapes=d.ops["shapes"],
+                    n_process=n)
 
 
 def sanity_check(units, gen=None):
@@ -595,17 +681,26 @@ if __name__ == "__main__":
     ap.add_argument("--check-every", type=int, default=2000)
     a = ap.parse_args()
 
-    cfg = TSCMPriorConfig(n_sensors=a.n_sensors, n_load_channels=a.n_load,
-                          graph_type=a.graph_type, couple_hi=not a.no_couple,
-                          signature_norm=a.signature_norm)
+
+    cfg = TSCMPriorConfig(
+        sensors=SensorConfig(
+        n_sensors=a.n_sensors, 
+        n_load_channels=a.n_load, 
+        graph_type=a.graph_type, 
+        couple_hi=a.no_couple,
+        signature_norm=a.signature_norm
+        ),
+        latent=LatentConfig()
+    )
+
     gen = TSCMGenerator(cfg, seed=a.seed)
     comp = None if a.compression == "none" else a.compression
     dtype = np.float16 if a.float16 else np.float32
 
     print(f"Generating {a.n} units -> {a.out}  "
-          f"({cfg.n_sensors} process + {cfg.n_load_channels} load = "
-          f"{total_channels(cfg)} channels, graph={cfg.graph_type}, "
-          f"couple_hi={cfg.couple_hi}, "
+          f"({cfg.sensors.n_sensors} process + {cfg.sensors.n_load_channels} load = "
+          f"{total_channels(cfg)} channels, graph={cfg.sensors.graph_type}, "
+          f"couple_hi={cfg.sensors.couple_hi}, "
           f"compression={a.compression}, dtype={np.dtype(dtype).name})")
     # STREAMING: constant memory footprint, only a small diagnostics buffer
     probe = []
