@@ -12,7 +12,7 @@ ending at a sampled position ``e``:
     readout uses the masked pooling / the last real index.
   * labels: ``hi`` per real step (clamped -- the first-passage overshoot
     beyond ``hi_clamp`` occurs only at terminal steps and is Euler
-    discretisation, not signal), ``rul[e] / rul_cap`` at the window end,
+    discretisation, not signal), ``rul[e] / rul_cap[unit]`` at the window end,
     and the unit's operator curves in log space, standardised with the
     fixed constants ``dyn_log_mean``/``dyn_log_std`` so that every
     training target is O(1) and the head losses start balanced (the raw
@@ -144,19 +144,20 @@ class WindowSampler:
         self.sensors, self.hi, self.rul = [], [], []
         self.onset, self.t_fail, self.censored = [], [], []
         self.mu_grid, self.sigma_grid, self.n_process = [], [], []
-        self.rul_cap = None
+        self.rul_cap_mode = None
         self.n_channels = self.cfg.max_channels     # model input width
         max_proc = self.cfg.max_channels - self.cfg.n_load_slots
         units_per_path = []
+        self.rul_cap_unit = []
         for path in paths:
             store = open_dataset(path)
             units_per_path.append(len(store))
-            cap = float(store.config.get("rul_cap", 125.0))
-            if self.rul_cap is None:
-                self.rul_cap = cap
-            elif cap != self.rul_cap:
-                raise ValueError(f"rul_cap mismatch across datasets: "
-                                 f"{cap} vs {self.rul_cap}")
+            lc = store.config.get("latent", store.config)
+            mode = lc.get("rul_cap_mode", "fixed")
+            if self.rul_cap_mode is None: 
+                self.rul_cap_mode = mode 
+            elif mode != self.rul_cap_mode:
+                raise ValueError(f'rul_cap_mode missmatch across datasets')
             for i in range(len(store)):
                 u = store[i]
                 n_load = u.sensors.shape[1] - u.n_process
@@ -178,12 +179,14 @@ class WindowSampler:
                 self.censored.append(u.censored)
                 self.mu_grid.append(u.mu_grid)
                 self.sigma_grid.append(u.sigma_grid)
+                self.rul_cap_unit.append(float(u.rul.max()))
             store.close()
         self.n_units = len(self.sensors)
         self.lengths = np.array([len(s) for s in self.sensors])
         self.onset = np.array(self.onset)
         self.censored = np.array(self.censored)
         self.n_process = np.array(self.n_process)
+        self.rul_cap_unit = np.array(self.rul_cap_unit, dtype=np.float32)
         if path_weights is None:
             self.p_unit = None
         else:
@@ -269,7 +272,7 @@ class WindowSampler:
             x[j][:, n_slots:] = compact[:, npi:]
             y_health[j, :n_real] = torch.from_numpy(
                 np.minimum(self.hi[i][s:e + 1], c.hi_clamp))
-            y_rul[j] = float(self.rul[i][e]) / self.rul_cap
+            y_rul[j] = float(self.rul[i][e]) / max(float(self.rul_cap_unit[i]), 1.0)
             y_dyn[j] = torch.from_numpy(self.log_dyn[i])
             last_idx[j] = n_real - 1
             pre_onset[j] = bool(e < self.onset[i])
@@ -277,6 +280,9 @@ class WindowSampler:
         return dict(x=x, mask=mask, y_health=y_health, y_rul=y_rul,
                     y_dyn=y_dyn, last_idx=last_idx, pre_onset=pre_onset,
                     hi_end=hi_end,
+                    rul_cap=torch.tensor(
+                        [float(self.rul_cap_unit[i]) for i, _ in draws]
+                    ),
                     units=torch.tensor([i for i, _ in draws]),
                     ends=torch.tensor([e for _, e in draws]))
 
