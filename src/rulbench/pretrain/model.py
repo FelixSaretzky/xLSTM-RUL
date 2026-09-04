@@ -57,6 +57,8 @@ class ModelConfig:
     w_health: float = 1.0
     w_dyn: float = 1.0
     w_rul: float = 1.0
+    min_logstd: float = -4.0 
+    max_logstd: float = 1.0
 
 
 class AttentionPooling(nn.Module):
@@ -152,21 +154,17 @@ class RULPretrainModel(nn.Module):
         grid (G,) query locations for the dynamics head."""
         h = self.encoder(self.in_proj(x))
         dynamic_encoded = self.dyn_head(h, mask, grid)
+        mean, log_std = dynamic_encoded[..., :2], dynamic_encoded[..., 2:].clamp(self.cfg.min_logstd, self.cfg.max_logstd)
 
-        return dynamic_encoded
+        return {
+            "mu":mean, "log_std":log_std
+            }
 
 
-def pretrain_loss(out: dict, batch: dict, cfg: ModelConfig
+def pretrain_loss(predicted_rul, batch: dict, cfg: ModelConfig
                   ) -> tuple[torch.Tensor, dict]:
-    """Weighted sum of the three heads' losses; returns (total, parts)."""
-    m = batch["mask"].float()
-    se = (out["health"] - batch["y_health"]) ** 2 * m
-    parts = {"health": se.sum() / m.sum().clamp(min=1.0),
-             "dyn": ((out["dyn"] - batch["y_dyn"]) ** 2).mean(),
-             "rul": ((out["rul"] - batch["y_rul"]) ** 2).mean()}
-    total = (cfg.w_health * parts["health"] + cfg.w_dyn * parts["dyn"]
-             + cfg.w_rul * parts["rul"])
-    return total, parts
+    part = ((predicted_rul - batch["y_rul"]) **2).mean()
+    return part 
 
 
 def model_summary(model: RULPretrainModel) -> str:
