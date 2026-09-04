@@ -143,22 +143,17 @@ class RULPretrainModel(nn.Module):
         D = cfg.embedding_dim
         self.in_proj = nn.Linear(cfg.in_channels, D)
         self.encoder = xLSTMBlockStack(_stack_config(cfg))
-        self.health_head = nn.Linear(D, 1)
         self.dyn_head = GridCrossAttention(
             D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads)
-        self.rul_pool = AttentionPooling(D, num_heads=cfg.pool_heads)
-        self.rul_head = nn.Linear(D, 1)
+
 
     def forward(self, x, mask, grid) -> dict:
         """x (B, T, C) normalised windows, mask (B, T) True = real step,
         grid (G,) query locations for the dynamics head."""
         h = self.encoder(self.in_proj(x))
-        return {
-            "health": self.health_head(h).squeeze(-1),           # (B, T)
-            "dyn": self.dyn_head(h, mask, grid),                 # (B, G, 2)
-            "rul": self.rul_head(
-                self.rul_pool(h, mask=mask)).squeeze(-1),        # (B,)
-        }
+        dynamic_encoded = self.dyn_head(h, mask, grid)
+
+        return dynamic_encoded
 
 
 def pretrain_loss(out: dict, batch: dict, cfg: ModelConfig
