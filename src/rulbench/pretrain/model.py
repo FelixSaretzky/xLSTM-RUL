@@ -144,7 +144,7 @@ class RULPretrainModel(nn.Module):
         self.in_proj = nn.Linear(cfg.in_channels, D)
         self.encoder = xLSTMBlockStack(_stack_config(cfg))
         self.dyn_head = GridCrossAttention(
-            D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads)
+            D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads, out_features=4)
 
 
     def forward(self, x, mask, grid) -> dict:
