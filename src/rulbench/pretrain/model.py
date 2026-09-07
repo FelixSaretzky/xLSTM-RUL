@@ -147,6 +147,7 @@ class RULPretrainModel(nn.Module):
         self.encoder = xLSTMBlockStack(_stack_config(cfg))
         self.dyn_head = GridCrossAttention(
             D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads, out_features=4)
+        self.health_head = nn.Linear(D, 2) 
 
 
     def forward(self, x, mask, grid) -> dict:
@@ -154,18 +155,34 @@ class RULPretrainModel(nn.Module):
         grid (G,) query locations for the dynamics head."""
         h = self.encoder(self.in_proj(x))
         dynamic_encoded = self.dyn_head(h, mask, grid)
-        mean, log_std = dynamic_encoded[..., :2], dynamic_encoded[..., 2:].clamp(self.cfg.min_logstd, self.cfg.max_logstd)
+        sde_mean, sde_log_std = dynamic_encoded[..., :2], dynamic_encoded[..., 2:].clamp(self.cfg.min_logstd, self.cfg.max_logstd)
+        health = self.health_head(h) 
+        health_mean= health[..., 0]
+        health_logstd = health[..., 1].clamp(-5.0, 0.0)
 
         return {
-            "mu":mean, "log_std":log_std
-            }
+            "sde_mu": sde_mean, "sde_log_std": sde_log_std,
+            "health_mu": health_mean, "health_log_std": health_logstd
+        }
+
+def _gauss_nll(y, mean, log_std):
+    return log_std + 0.5 * ((y - mean) / log_std.exp()) ** 2
 
 
-def pretrain_loss(predicted_rul, batch: dict, cfg: ModelConfig
+def pretrain_loss(prediction, batch: dict, cfg: ModelConfig
                   ) -> tuple[torch.Tensor, dict]:
-    part = ((predicted_rul - batch["y_rul"]) **2).mean()
-    return part 
+    m = batch["mask"].float()                         
 
+    nll_h = _gauss_nll(batch["y_health"], prediction["health_mu"],
+                       prediction["health_log_std"])
+    loss_health = (nll_h * m).sum() / m.sum().clamp(min=1)
+
+    loss_dyn = _gauss_nll(batch["y_dyn"], prediction["dyn_mu"],
+                          prediction["dyn_log_std"]).mean()
+
+    total = cfg.w_dyn * loss_dyn + cfg.w_health * loss_health
+    return total, dict(dyn=loss_dyn.item(), health=loss_health.item(),
+                       total=total.item())
 
 def model_summary(model: RULPretrainModel) -> str:
     n = sum(p.numel() for p in model.parameters())
