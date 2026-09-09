@@ -174,13 +174,13 @@ def main(argv=None):
         sched.step()
 
         if step == 1:
-            parts_f = {k: float(v.detach()) for k, v in parts.items()}
+            parts_f = {k: float(v) for k, v in parts.items()}
             balance = "  ".join(f"{k}={v:.3f}" for k, v in parts_f.items())
             print(f"step 1 head-loss balance: {balance}")
             log.write(json.dumps({"step": 1, **parts_f}) + "\n")
         if step % a.log_every == 0:
             rec = {"step": step, "loss": float(loss.detach()),
-                   **{k: float(v.detach()) for k, v in parts.items()},
+                   **{k: float(v) for k, v in parts.items()},
                    "sec": round(time.time() - t0, 1)}
             log.write(json.dumps(rec) + "\n")
             log.flush()
