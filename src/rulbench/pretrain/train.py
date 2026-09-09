@@ -191,8 +191,8 @@ def main(argv=None):
         if step % a.val_every == 0 or step == a.steps:
             val = {name: evaluate(model, vs, draws, grid, a.batch, device)
                    for name, vs, draws in val_sets}
-            crit = [v["rul"] for v in val.values()]
-            val_crit = sum(crit) / len(crit)
+            # crit = [v["rul"] for v in val.values()]
+            # val_crit = sum(crit) / len(crit)
             log.write(json.dumps({"step": step, "val": val}) + "\n")
             log.flush()
             if wb:
@@ -203,9 +203,9 @@ def main(argv=None):
                       + "  ".join(f"{k} {v:.4f}" for k, v in parts.items()))
             save_checkpoint(os.path.join(a.out, "last.pt"), model,
                             {"step": step, "val": val})
-            if val_crit < best_val:
-                best_val = val_crit
-                save_checkpoint(os.path.join(a.out, "best.pt"), model,
+            # if val_crit < best_val:
+            #     best_val = val_crit
+            #     save_checkpoint(os.path.join(a.out, "best.pt"), model,
                                 {"step": step, "val": val})
     log.close()
     if wb:
