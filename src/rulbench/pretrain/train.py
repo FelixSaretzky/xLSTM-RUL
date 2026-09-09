@@ -206,7 +206,7 @@ def main(argv=None):
             # if val_crit < best_val:
             #     best_val = val_crit
             #     save_checkpoint(os.path.join(a.out, "best.pt"), model,
-                                {"step": step, "val": val})
+                                # {"step": step, "val": val})
     log.close()
     if wb:
         wb.finish()
