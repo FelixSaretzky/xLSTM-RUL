@@ -177,8 +177,8 @@ def pretrain_loss(prediction, batch: dict, cfg: ModelConfig
                        prediction["health_log_std"])
     loss_health = (nll_h * m).sum() / m.sum().clamp(min=1)
 
-    loss_dyn = _gauss_nll(batch["y_dyn"], prediction["dyn_mu"],
-                          prediction["dyn_log_std"]).mean()
+    loss_dyn = _gauss_nll(batch["y_dyn"], prediction["sde_mu"],
+                          prediction["sde_log_std"]).mean()
 
     total = cfg.w_dyn * loss_dyn + cfg.w_health * loss_health
     return total, dict(dyn=loss_dyn.item(), health=loss_health.item(),
