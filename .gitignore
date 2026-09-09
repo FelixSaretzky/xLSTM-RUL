@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .ruff_cache/
 .pytest_cache/
+runs/
 
 # generated demo data (notebooks write these locally)
 src/notebooks/*.parquet
