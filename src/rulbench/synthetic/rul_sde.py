@@ -644,6 +644,8 @@ if __name__ == "__main__":
     ap.add_argument("--float16", action="store_true",
                     help="store sensors as float16 (half the size, lossy)")
     ap.add_argument("--check-every", type=int, default=2000)
+    ap.add_argument("--min-length", type=int, default=40)
+    ap.add_argument("--max-length", type=int, default=2000)
     a = ap.parse_args()
 
 
@@ -653,9 +655,9 @@ if __name__ == "__main__":
         n_load_channels=a.n_load, 
         graph_type=a.graph_type, 
         couple_hi=a.no_couple,
-        signature_norm=a.signature_norm
+        signature_norm=a.signature_norm,
         ),
-        latent=LatentConfig()
+        latent=LatentConfig(min_length=a.min_length, max_length=a.max_length)
     )
 
     gen = TSCMGenerator(cfg, seed=a.seed)
