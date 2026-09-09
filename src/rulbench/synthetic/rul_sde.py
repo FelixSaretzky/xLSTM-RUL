@@ -483,7 +483,7 @@ class TSCMGenerator:
         """Noise-free fixed point of the sensor dynamics at constant X' and s.
         Accounts for graph propagation, self-AR and nonlinearities -- the
         calibration is therefore numerically exact, not merely formal."""
-        n = self.cfg.n_sensors
+        n = self.cfg.sensors.n_sensors
         x = np.zeros(n)
         for _ in range(n_steps):
             xn = np.zeros(n)
