@@ -51,7 +51,7 @@ def to_device(batch: dict, device: torch.device) -> dict:
 
 
 @torch.no_grad()
-def evaluate(model, sampler, draws, grid, batch_size, device) -> dict:
+def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool = False) -> dict:
     """Per-head validation losses over fixed draws.  Each part is weighted
     by what it averages over (real steps for health, windows otherwise),
     so the numbers are independent of the eval batch size."""
@@ -59,6 +59,8 @@ def evaluate(model, sampler, draws, grid, batch_size, device) -> dict:
     sums, weights = {}, {}
     for batch in sampler.eval_batches(draws, batch_size):
         batch = to_device(batch, device)
+        if zero_inputs:
+            batch["x"].zero_()
         out = model(batch["x"], batch["mask"], grid)
         _, parts = pretrain_loss(out, batch, model.cfg)
         for k, v in parts.items():
@@ -101,6 +103,7 @@ def main(argv=None):
     ap.add_argument("--no-wandb", action="store_true",
                     help="disable W&B, keep only stdout + log.jsonl")
     ap.add_argument("--n-load", type=int, default=2)
+    ap.add_argument("--zero-inputs", action="store_true")
     a = ap.parse_args(argv)
 
     torch.manual_seed(a.seed)
@@ -166,6 +169,8 @@ def main(argv=None):
     log = open(os.path.join(a.out, "log.jsonl"), "w")
     for step in range(1, a.steps + 1):
         batch = to_device(sampler.sample_batch(a.batch), device)
+        if a.zero_inputs:
+            batch["x"].zero_()
         out = model(batch["x"], batch["mask"], grid)
         loss, parts = pretrain_loss(out, batch, mcfg)
         opt.zero_grad(set_to_none=True)
@@ -190,7 +195,7 @@ def main(argv=None):
             print(f"step {step}  loss {rec['loss']:.4f}  "
                   + "  ".join(f"{k} {rec[k]:.4f}" for k in parts))
         if step % a.val_every == 0 or step == a.steps:
-            val = {name: evaluate(model, vs, draws, grid, a.batch, device)
+            val = {name: evaluate(model, vs, draws, grid, a.batch, device, a.zero_inputs)
                    for name, vs, draws in val_sets}
             # crit = [v["rul"] for v in val.values()]
             # val_crit = sum(crit) / len(crit)
