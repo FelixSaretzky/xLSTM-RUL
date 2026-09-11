@@ -100,6 +100,7 @@ def main(argv=None):
                          "WANDB_API_KEY or `wandb login`)")
     ap.add_argument("--no-wandb", action="store_true",
                     help="disable W&B, keep only stdout + log.jsonl")
+    ap.add_argument("--n-load", type=int, default=2)
     a = ap.parse_args(argv)
 
     torch.manual_seed(a.seed)
