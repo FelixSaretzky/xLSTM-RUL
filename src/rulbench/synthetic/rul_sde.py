@@ -654,7 +654,7 @@ if __name__ == "__main__":
         n_sensors=a.n_sensors, 
         n_load_channels=a.n_load, 
         graph_type=a.graph_type, 
-        couple_hi=a.no_couple,
+        couple_hi=not a.no_couple,
         signature_norm=a.signature_norm,
         ),
         latent=LatentConfig(min_length=a.min_length, max_length=a.max_length)
