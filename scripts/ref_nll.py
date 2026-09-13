@@ -24,3 +24,17 @@ for name, rows in (("window contains onset", anchored),
     if len(a) > 10:
         print(f"{name:24s} n={len(a):5d}  corr(||x-baseline||, X') = "
               f"{np.corrcoef(a[:,0], a[:,1])[0,1]:+.3f}")
+
+
+from rulbench.dataset_io import open_dataset, dataset_info
+print(dataset_info("data/base_val.h5")["config"])
+
+import numpy as np
+st = open_dataset("data/base_val.h5")
+ends = []
+for i in range(200):
+    u = st[i]
+    if u.censored or u.onset < 20: continue
+    p = u.sensors[:, :u.n_process]
+    ends.append(np.linalg.norm(p[-1] - p[:u.onset].mean(0)))
+print("||x - baseline|| at end of life:", np.median(ends))
