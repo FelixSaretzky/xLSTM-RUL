@@ -97,6 +97,7 @@ class WindowConfig:
     max_channels: int = 32      # model input width (N-CMAPSS default = 32)
     n_load_slots: int = 2       # load channels, always the LAST slots
     permute_slots: bool = True  # scatter process channels (training only)
+    random_offset: bool = True  
 
 
 def normalize_windows(x: torch.Tensor, mask: torch.Tensor, n_process: int,
@@ -240,7 +241,7 @@ class WindowSampler:
         return i, int(rng.integers(lo, self.lengths[i]))
 
     def _assemble(self, draws: list[tuple[int, int]],
-                  permute: bool = False) -> dict:
+                  permute: bool = False, offset: bool = False) -> dict:
         c = self.cfg
         B, W = len(draws), c.window
         n_slots = c.max_channels - c.n_load_slots
@@ -255,10 +256,11 @@ class WindowSampler:
         for j, (i, e) in enumerate(draws):
             s = max(0, e - W + 1)
             n_real = e - s + 1
+            off = (int(self.perm_rng.integers(0, W - n_real +1)) if offset and n_real < W else 0)
             npi = int(self.n_process[i])
             compact = torch.zeros(W, npi + c.n_load_slots)
-            compact[:n_real] = torch.from_numpy(self.sensors[i][s:e + 1])
-            mask[j, :n_real] = True
+            compact[off:off + n_real] = torch.from_numpy(self.sensors[i][s:e + 1])
+            mask[j, off: off + n_real] = True
             compact = normalize_windows(
                 compact[None], mask[j][None], npi, c)[0]
             if permute:
@@ -270,11 +272,11 @@ class WindowSampler:
             # jumps to the front (shape (npi, W)) and the assign transposes.
             x[j][:, slots] = compact[:, :npi]
             x[j][:, n_slots:] = compact[:, npi:]
-            y_health[j, :n_real] = torch.from_numpy(
+            y_health[j, off:off + n_real] = torch.from_numpy(
                 np.minimum(self.hi[i][s:e + 1], c.hi_clamp))
             y_rul[j] = float(self.rul[i][e]) / max(float(self.rul_cap_unit[i]), 1.0)
             y_dyn[j] = torch.from_numpy(self.log_dyn[i])
-            last_idx[j] = n_real - 1
+            last_idx[j] = off + n_real - 1
             pre_onset[j] = bool(e < self.onset[i])
             hi_end[j] = float(self.hi[i][e])
         return dict(x=x, mask=mask, y_health=y_health, y_rul=y_rul,
@@ -288,7 +290,7 @@ class WindowSampler:
 
     def sample_batch(self, batch_size: int) -> dict:
         return self._assemble([self._sample_end() for _ in range(batch_size)],
-                              permute=self.cfg.permute_slots)
+                              permute=self.cfg.permute_slots, offset=self.cfg.random_offset)
 
     def fixed_eval_draws(self, per_unit: int = 2, seed: int = 0
                          ) -> list[tuple[int, int]]:
