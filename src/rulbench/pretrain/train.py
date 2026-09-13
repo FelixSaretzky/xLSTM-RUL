@@ -61,7 +61,9 @@ def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool 
         batch = to_device(batch, device)
         if zero_inputs:
             batch["x"].zero_()
-        out = model(batch["x"], batch["mask"], grid)
+            batch["mean"].zero_()
+            batch["std"].zero_()
+        out = model(batch["x"], batch["mean"], batch["std"], batch["mask"], grid)
         _, parts = pretrain_loss(out, batch, model.cfg)
         for k, v in parts.items():
             w = (float(batch["mask"].sum()) if k == "health"
@@ -171,6 +173,8 @@ def main(argv=None):
         batch = to_device(sampler.sample_batch(a.batch), device)
         if a.zero_inputs:
             batch["x"].zero_()
+            batch["mean"].zero_()
+            batch["std"].zero_()
         out = model(batch["x"], batch["mean"], batch["std"], batch["mask"], grid)
         loss, parts = pretrain_loss(out, batch, mcfg)
         opt.zero_grad(set_to_none=True)

@@ -101,7 +101,7 @@ class WindowConfig:
 
 
 def normalize_windows(x: torch.Tensor, mask: torch.Tensor, n_process: int,
-                      cfg: WindowConfig) -> torch.Tensor:
+                      cfg: WindowConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Masked per-window, per-channel input normalisation (see module doc).
 
     x (B, T, C) float32, mask (B, T) bool with True = real step.  Returns a
@@ -124,8 +124,7 @@ def normalize_windows(x: torch.Tensor, mask: torch.Tensor, n_process: int,
                        torch.ones_like(x[..., n_process:]))
 
     out = torch.cat([proc, load], dim=-1)
-    return out * m, mean, std
-
+    return out * m, mean, std.clamp(min=cfg.std_floor).log()
 
 class WindowSampler:
     """In-memory window sampler over one or more packed HDF5 datasets."""
@@ -254,6 +253,8 @@ class WindowSampler:
         last_idx = torch.zeros(B, dtype=torch.long)
         pre_onset = torch.zeros(B, dtype=torch.bool)
         hi_end = torch.zeros(B)
+        stat_mean = torch.zeros(B, c.max_channels)
+        stat_lstd = torch.zeros(B, c.max_channels)
         for j, (i, e) in enumerate(draws):
             s = max(0, e - W + 1)
             n_real = e - s + 1
@@ -262,8 +263,9 @@ class WindowSampler:
             compact = torch.zeros(W, npi + c.n_load_slots)
             compact[off:off + n_real] = torch.from_numpy(self.sensors[i][s:e + 1])
             mask[j, off: off + n_real] = True
-            compact, mean, std = normalize_windows(
-                compact[None], mask[j][None], npi, c)[0]
+            compact, cm, cls = normalize_windows(
+                compact[None], mask[j][None], npi, c)
+            compact, cm, cls = compact[0], cm[0], cls[0]
             if permute:
                 slots = torch.from_numpy(
                     self.perm_rng.choice(n_slots, size=npi, replace=False))
@@ -273,6 +275,10 @@ class WindowSampler:
             # jumps to the front (shape (npi, W)) and the assign transposes.
             x[j][:, slots] = compact[:, :npi]
             x[j][:, n_slots:] = compact[:, npi:]
+            stat_mean[j][slots] = cm[:npi]
+            stat_lstd[j][slots] = cls[:npi]
+            stat_mean[j][n_slots:] = cm[npi:]
+            stat_lstd[j][n_slots:] = cls[npi:]
             y_health[j, off:off + n_real] = torch.from_numpy(
                 np.minimum(self.hi[i][s:e + 1], c.hi_clamp))
             y_rul[j] = float(self.rul[i][e]) / max(float(self.rul_cap_unit[i]), 1.0)
@@ -288,8 +294,8 @@ class WindowSampler:
                     ),
                     units=torch.tensor([i for i, _ in draws]),
                     ends=torch.tensor([e for _, e in draws]),
-                    mean=mean, 
-                    std=std)
+                    mean=stat_mean, 
+                    std=stat_lstd)
 
     def sample_batch(self, batch_size: int) -> dict:
         return self._assemble([self._sample_end() for _ in range(batch_size)],
@@ -304,7 +310,7 @@ class WindowSampler:
         for i in range(self.n_units):
             draws.append((i, int(self.lengths[i] - 1)))
             for _ in range(per_unit - 1):
-                lo = min(self.cfg.min_real - 1, self.lengths[i] - 1)
+                lo = min(self.cfg.window - 1, self.lengths[i] - 1)
                 draws.append((i, int(rng.integers(lo, self.lengths[i]))))
         return draws
 

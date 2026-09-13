@@ -156,7 +156,7 @@ class RULPretrainModel(nn.Module):
     def forward(self, x, mean, std, mask, grid) -> dict:
         """x (B, T, C) normalised windows, mask (B, T) True = real step,
         grid (G,) query locations for the dynamics head."""
-        stats = self.scale_proj(torch.cat([mean, torch.log(std.clamp(min=self.cfg.std_floor))], dim=-1))
+        stats = self.scale_proj(torch.cat([mean, std], dim=-1))
         # h = h + self.scale_proj(stats).unsqueeze(1)
         h = self.encoder(self.in_proj(x) + stats.unsqueeze(1))
 
