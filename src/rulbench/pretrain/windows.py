@@ -124,7 +124,7 @@ def normalize_windows(x: torch.Tensor, mask: torch.Tensor, n_process: int,
                        torch.ones_like(x[..., n_process:]))
 
     out = torch.cat([proc, load], dim=-1)
-    return out * m
+    return out * m, mean, std
 
 
 class WindowSampler:
@@ -262,7 +262,7 @@ class WindowSampler:
             compact = torch.zeros(W, npi + c.n_load_slots)
             compact[off:off + n_real] = torch.from_numpy(self.sensors[i][s:e + 1])
             mask[j, off: off + n_real] = True
-            compact = normalize_windows(
+            compact, mean, std = normalize_windows(
                 compact[None], mask[j][None], npi, c)[0]
             if permute:
                 slots = torch.from_numpy(
@@ -287,7 +287,9 @@ class WindowSampler:
                         [float(self.rul_cap_unit[i]) for i, _ in draws]
                     ),
                     units=torch.tensor([i for i, _ in draws]),
-                    ends=torch.tensor([e for _, e in draws]))
+                    ends=torch.tensor([e for _, e in draws]),
+                    mean=mean, 
+                    std=std)
 
     def sample_batch(self, batch_size: int) -> dict:
         return self._assemble([self._sample_end() for _ in range(batch_size)],

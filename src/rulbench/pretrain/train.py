@@ -171,7 +171,7 @@ def main(argv=None):
         batch = to_device(sampler.sample_batch(a.batch), device)
         if a.zero_inputs:
             batch["x"].zero_()
-        out = model(batch["x"], batch["mask"], grid)
+        out = model(batch["x"], batch["mean"], batch["std"], batch["mask"], grid)
         loss, parts = pretrain_loss(out, batch, mcfg)
         opt.zero_grad(set_to_none=True)
         loss.backward()

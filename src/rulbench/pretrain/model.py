@@ -59,6 +59,8 @@ class ModelConfig:
     w_rul: float = 1.0
     min_logstd: float = -4.0 
     max_logstd: float = 1.0
+    std_floor: float = 1e-4
+
 
 
 class AttentionPooling(nn.Module):
@@ -148,12 +150,16 @@ class RULPretrainModel(nn.Module):
         self.dyn_head = GridCrossAttention(
             D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads, out_features=4)
         self.health_head = nn.Linear(D, 2) 
+        self.scale_proj = nn.Linear(2 * cfg.in_channels, cfg.embedding_dim)
 
 
-    def forward(self, x, mask, grid) -> dict:
+    def forward(self, x, mean, std, mask, grid) -> dict:
         """x (B, T, C) normalised windows, mask (B, T) True = real step,
         grid (G,) query locations for the dynamics head."""
-        h = self.encoder(self.in_proj(x))
+        stats = self.scale_proj(torch.cat([mean, torch.log(std.clamp(min=self.cfg.std_floor))], dim=-1))
+        # h = h + self.scale_proj(stats).unsqueeze(1)
+        h = self.encoder(self.in_proj(x) + stats.unsqueeze(1))
+
         dynamic_encoded = self.dyn_head(h, mask, grid)
         sde_mean, sde_log_std = dynamic_encoded[..., :2], dynamic_encoded[..., 2:].clamp(self.cfg.min_logstd, self.cfg.max_logstd)
         health = self.health_head(h) 
