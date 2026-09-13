@@ -237,7 +237,8 @@ class WindowSampler:
             e = int(rng.integers(self._af_lo[k], self._af_hi[k] + 1))
             return int(self._af_units[k]), e
         i = self._draw_unit()
-        lo = min(c.min_real - 1, self.lengths[i] - 1)
+        # lo = min(c.min_real - 1, self.lengths[i] - 1)
+        lo = min(c.window - 1, self.lengths[i] - 1) 
         return i, int(rng.integers(lo, self.lengths[i]))
 
     def _assemble(self, draws: list[tuple[int, int]],
