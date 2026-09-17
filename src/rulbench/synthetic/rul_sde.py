@@ -180,7 +180,7 @@ class SensorConfig:
     noise_families: tuple = ("gauss", "student_t", "skewed")
     student_df_range: tuple = (2.5, 15.0)
     skew_range: tuple = (0.2, 0.7)
-    noise_norm_range: tuple = (0.02, 0.4)
+    noise_norm_range: tuple = (0.02, 0.05)
     noise_scale: float = 0.3                     # only for signature_norm="free"
     sensor_clip: float = 50.0
     nonlinearities: tuple = ("tanh", "relu", "sin", "identity")
