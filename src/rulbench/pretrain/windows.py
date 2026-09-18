@@ -303,15 +303,27 @@ class WindowSampler:
 
     def fixed_eval_draws(self, per_unit: int = 2, seed: int = 0
                          ) -> list[tuple[int, int]]:
-        """Deterministic validation draws: the terminal window of every unit
-        plus ``per_unit - 1`` seeded random ends."""
+        """Deterministic validation draws -- FULL windows only.
+
+        Diagnostic configuration: with n_real < window the window starts at
+        unit step 0, so the window index equals the unit step and X'(t) is
+        readable from the position alone (measured: the health head scored
+        the same on zeroed inputs as on real ones). Units shorter than the
+        window are skipped and the terminal draw is dropped, since for a
+        short unit e = len-1 is automatically an unfull window.
+
+        NOT the production setting: terminal windows are what a benchmark
+        queries, and short units belong in the prior.
+        """
         rng = np.random.default_rng(seed)
         draws = []
         for i in range(self.n_units):
-            draws.append((i, int(self.lengths[i] - 1)))
+            if self.lengths[i] < self.cfg.window:
+                continue
+            # draws.append((i, int(self.lengths[i] - 1)))
             for _ in range(per_unit - 1):
-                lo = min(self.cfg.window - 1, self.lengths[i] - 1)
-                draws.append((i, int(rng.integers(lo, self.lengths[i]))))
+                # lo = min(self.cfg.window - 1, self.lengths[i] - 1)
+                draws.append((i, int(rng.integers(self.cfg.window - 1, self.lengths[i]))))
         return draws
 
     def eval_batches(self, draws: list[tuple[int, int]], batch_size: int):
