@@ -182,13 +182,18 @@ def pretrain_loss(prediction, batch: dict, cfg: ModelConfig
     nll_h = _gauss_nll(batch["y_health"], prediction["health_mu"],
                        prediction["health_log_std"])
     loss_health = (nll_h * m).sum() / m.sum().clamp(min=1)
+    idx = batch["last_idx"][:, None]
+    health_end = _gauss_nll(
+        batch["hi_end"],
+        prediction["health_mu"].gather(1, idx).squeeze(1),
+        prediction["health_log_std"].gather(1, idx).squeeze(1)).mean()
 
     loss_dyn = _gauss_nll(batch["y_dyn"], prediction["sde_mu"],
                           prediction["sde_log_std"]).mean()
 
     total = cfg.w_dyn * loss_dyn + cfg.w_health * loss_health
     return total, dict(dyn=loss_dyn.item(), health=loss_health.item(),
-                       total=total.item())
+                       total=total.item(), health_end=health_end.item())
 
 def model_summary(model: RULPretrainModel) -> str:
     n = sum(p.numel() for p in model.parameters())

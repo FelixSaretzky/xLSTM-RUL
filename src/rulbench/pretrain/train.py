@@ -57,6 +57,7 @@ def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool 
     so the numbers are independent of the eval batch size."""
     model.eval()
     sums, weights = {}, {}
+    per_step = {"health"}
     for batch in sampler.eval_batches(draws, batch_size):
         batch = to_device(batch, device)
         if zero_inputs:
@@ -65,9 +66,9 @@ def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool 
             batch["std"].zero_()
         out = model(batch["x"], batch["mean"], batch["std"], batch["mask"], grid)
         _, parts = pretrain_loss(out, batch, model.cfg)
+        n_win = float(batch["x"].shape[0])
         for k, v in parts.items():
-            w = (float(batch["mask"].sum()) if k == "health"
-                 else float(len(batch["y_rul"])))
+            w = float(batch["mask"].sum()) if k in per_step else n_win
             sums[k] = sums.get(k, 0.0) + float(v) * w
             weights[k] = weights.get(k, 0.0) + w
     model.train()
