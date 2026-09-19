@@ -61,6 +61,7 @@ class ModelConfig:
     max_logstd: float = 1.0
     std_floor: float = 1e-4
     health_tau : float = 32.0
+    dyn_logstd_init: float = -0.45
 
 
 
@@ -98,7 +99,7 @@ class GridCrossAttention(nn.Module):
     grid point (see module doc for provenance)."""
 
     def __init__(self, dim: int, n_layers: int = 2, n_heads: int = 4,
-                 out_features: int = 2):
+                 out_features: int = 2, logstd_init: float = -0.45):
         super().__init__()
         self.query_embed = nn.Sequential(
             nn.Linear(1, dim), nn.GELU(), nn.Linear(dim, dim))
@@ -112,6 +113,10 @@ class GridCrossAttention(nn.Module):
             for _ in range(n_layers))
         self.norm2 = nn.ModuleList(nn.LayerNorm(dim) for _ in range(n_layers))
         self.out = nn.Linear(dim, out_features)
+        n_loc = out_features // 2 
+        with torch.no_grad():
+            self.out.weight[n_loc:].mul_(0.01)
+            self.out.bias[n_loc:].fill_(logstd_init)
 
     def forward(self, h, mask, grid):
         # h (B, T, D), mask (B, T) True = valid, grid (G,)
@@ -149,7 +154,7 @@ class RULPretrainModel(nn.Module):
         self.in_proj = nn.Linear(cfg.in_channels, D)
         self.encoder = xLSTMBlockStack(_stack_config(cfg))
         self.dyn_head = GridCrossAttention(
-            D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads, out_features=4)
+            D, n_layers=cfg.dyn_layers, n_heads=cfg.dyn_heads, out_features=4, logstd_init=cfg.dyn_logstd_init)
         self.health_head = nn.Linear(D, 2) 
         self.scale_proj = nn.Linear(2 * cfg.in_channels, cfg.embedding_dim)
 

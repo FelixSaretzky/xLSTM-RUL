@@ -167,18 +167,38 @@ def main(ckpt, data, zero_x=False, zero_stats=False):
     # the sd the head claims, and how well the claim tracks the |residual| it
     # should have anticipated.  A near-zero corr means log_std is effectively a
     # learned constant, and the marginal sd is then the level it should sit at.
-    print("\n  calibration of sde_log_std (test split)")
+    # Every NLL here is the MEAN OF LOGS over grid points, never the log of a
+    # mean -- the reference is allowed to know the marginal spread at each
+    # point separately, and log(mean sd) understates that by the Jensen gap
+    # (0.23 nats on this data, enough to invert the verdict).
+    #
+    # Four levels, each adding one thing over the last:
+    #   uninformed   per-point marginal spread, no window read at all
+    #   flat sigma   the head's mean, but ONE sd for the whole grid
+    #   oracle sigma the head's mean, with the per-point residual spread
+    #   head now     what the head actually scores
+    # (oracle - uninformed) = 0.5 * <log(1 - R^2_g)> is the whole prize for
+    # fixing sde_log_std; if that is large and "head now" is not, the location
+    # is fine and only the spread branch is untrained.
+    print("\n  calibration of sde_log_std (test split, per grid point)")
     res, sd_hat = Y[N_FIT:] - HEAD[N_FIT:], np.exp(LSD[N_FIT:])
     for k, name in ((0, "mu"), (1, "sigma")):
-        r, p = res[:, :, k].ravel(), sd_hat[:, :, k].ravel()
-        marg = Y[N_FIT:, :, k].std(0).mean()
-        c = float(np.corrcoef(np.abs(r), p)[0, 1]) if p.std() > 1e-9 else 0.0
-        print(f"    log {name:5s}: sd(resid) {r.std():.3f}   "
-              f"mean sd_hat {p.mean():.3f} (sd {p.std():.3f})   "
-              f"marginal {marg:.3f}   corr(|resid|, sd_hat) {c:+.3f}")
-        print(f"             NLL now {(LSD[N_FIT:, :, k] + 0.5 * (r.reshape(-1, G) / p.reshape(-1, G)) ** 2).mean():+.4f}"
-              f"   best constant sd {np.log(r.std()) + 0.5:+.4f}"
-              f"   uninformed {np.log(marg) + 0.5:+.4f}")
+        r, p = res[:, :, k], sd_hat[:, :, k]              # (N, G)
+        marg_g = Y[N_FIT:, :, k].std(0)                   # (G,)
+        res_g = r.std(0)                                  # (G,)
+        now = float((np.log(p) + 0.5 * (r / p) ** 2).mean())
+        unin = float((np.log(marg_g) + 0.5).mean())
+        flat = float(np.log(r.std()) + 0.5)
+        oracle = float((np.log(res_g) + 0.5).mean())
+        c = float(np.corrcoef(np.abs(r).ravel(), p.ravel())[0, 1])
+        print(f"    log {name}")
+        print(f"      head now {now:+.4f}   oracle sigma {oracle:+.4f}   "
+              f"flat sigma {flat:+.4f}   uninformed {unin:+.4f}")
+        print(f"      prize for fixing sigma {unin - oracle:+.4f} nats   "
+              f"currently realised {unin - now:+.4f}")
+        print(f"      sd_hat {p.mean():.3f} +- {p.std():.3f}   "
+              f"residual sd over grid {res_g.min():.3f}..{res_g.max():.3f}   "
+              f"corr(|resid|, sd_hat) {c:+.3f}")
 
 
 if __name__ == "__main__":
