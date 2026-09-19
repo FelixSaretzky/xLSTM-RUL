@@ -43,7 +43,7 @@ import torch
 from rulbench.pretrain.model import load_checkpoint
 from rulbench.pretrain.windows import WindowConfig, WindowSampler
 
-N_FIT, N_TEST, ALPHA, BATCH = 3000, 1000, 1.0, 64
+ALPHA, BATCH = 1.0, 64
 
 
 def r2_per_point(pred, y):
@@ -95,13 +95,16 @@ def main(ckpt, data, zero_x=False, zero_stats=False):
     s = WindowSampler([data], cfg, seed=3)
     grid = torch.from_numpy(s.grid).to(device)
     n_slots = cfg.max_channels - cfg.n_load_slots
-    need = N_FIT + N_TEST
 
+    # The SAME draws the training harness validates on.  Reading the model and
+    # the reference off different unit mixtures is what made the two disagree
+    # by 0.23 nats: fixed_eval_draws and sample_batch select different units,
+    # and the spread of the operator targets differs between them, which moves
+    # the uninformed reference without any model being involved.
+    draws = s.fixed_eval_draws()
     H, HEAD, LSD, FEAT, Y = [], [], [], [], []
-    got = 0
     with torch.no_grad():
-        while got < need:
-            b = s.sample_batch(BATCH)
+        for b in s.eval_batches(draws, BATCH):
             b = {k: (v.to(device) if torch.is_tensor(v) else v)
                  for k, v in b.items()}
             if zero_x:
@@ -126,40 +129,51 @@ def main(ckpt, data, zero_x=False, zero_stats=False):
                                           model.cfg.max_logstd).float().cpu())
             FEAT.append(window_features(b["x"], b["mask"], n_slots).float().cpu())
             Y.append(b["y_dyn"].float().cpu())
-            got += BATCH
 
-    H = torch.cat(H).numpy()[:need]
-    HEAD = torch.cat(HEAD).numpy()[:need]
-    LSD = torch.cat(LSD).numpy()[:need]
-    FEAT = torch.cat(FEAT).numpy()[:need]
-    Y = torch.cat(Y).numpy()[:need]
+    H, HEAD = torch.cat(H).numpy(), torch.cat(HEAD).numpy()
+    LSD, FEAT = torch.cat(LSD).numpy(), torch.cat(FEAT).numpy()
+    Y = torch.cat(Y).numpy()
+
+    # Split the probe's fit/test BY UNIT, not by window.  Every window of a
+    # unit carries that unit's operator as its target, so a random window split
+    # puts the same y_dyn on both sides and the ridge can score by recognising
+    # the unit instead of reading the degradation.  The head's own numbers are
+    # unaffected (nothing is fitted there), but the probe's would be inflated.
+    units = np.array([i for i, _ in draws])[:len(Y)]
+    uniq = np.unique(units)
+    rng = np.random.default_rng(0)
+    rng.shuffle(uniq)
+    fit_u = set(uniq[:int(0.75 * len(uniq))].tolist())
+    is_fit = np.array([u in fit_u for u in units])
+    fit, test = np.where(is_fit)[0], np.where(~is_fit)[0]
     G = Y.shape[1]
     Yf = Y.reshape(len(Y), -1)
 
     tag = " [zero-x]" if zero_x else " [zero-stats]" if zero_stats else ""
     print(f"{ckpt}  on  {data}{tag}")
-    print(f"n = {len(Y)} windows (fit {N_FIT}, test {len(Y) - N_FIT}), "
+    print(f"n = {len(Y)} windows from {len(uniq)} units on fixed_eval_draws "
+          f"(fit {len(fit)} / test {len(test)} windows, split by unit), "
           f"window {W}, grid points {G}\n")
 
-    Wgt = ridge_fit(H[:N_FIT], Yf[:N_FIT])
-    pred = ridge_predict(Wgt, H[N_FIT:]).reshape(-1, G, 2)
-    print(f"  probe on encoder state  : R^2 = {r2_per_point(pred, Y[N_FIT:]):+.3f}")
+    Wgt = ridge_fit(H[fit], Yf[fit])
+    pred = ridge_predict(Wgt, H[test]).reshape(-1, G, 2)
+    print(f"  probe on encoder state  : R^2 = {r2_per_point(pred, Y[test]):+.3f}")
 
     print(f"  dyn head itself         : R^2 = "
-          f"{r2_per_point(HEAD[N_FIT:], Y[N_FIT:]):+.3f}")
+          f"{r2_per_point(HEAD[test], Y[test]):+.3f}")
 
-    Wgt = ridge_fit(FEAT[:N_FIT], Yf[:N_FIT])
-    pred = ridge_predict(Wgt, FEAT[N_FIT:]).reshape(-1, G, 2)
-    print(f"  probe on slope + spread : R^2 = {r2_per_point(pred, Y[N_FIT:]):+.3f}")
+    Wgt = ridge_fit(FEAT[fit], Yf[fit])
+    pred = ridge_predict(Wgt, FEAT[test]).reshape(-1, G, 2)
+    print(f"  probe on slope + spread : R^2 = {r2_per_point(pred, Y[test]):+.3f}")
 
     # split the head's R^2 by operator: mu (channel 0) vs sigma (channel 1).
     # The model-free measurement said drift is unbiased but very noisy from a
     # single window, and diffusion is not separable from measurement noise at
     # all -- so a head that learns anything should learn it on mu first.
     for k, name in ((0, "mu"), (1, "sigma")):
-        yk = Y[N_FIT:, :, k:k + 1]
+        yk = Y[test][:, :, k:k + 1]
         print(f"    head on log {name:5s}     : R^2 = "
-              f"{r2_per_point(HEAD[N_FIT:, :, k:k + 1], yk):+.3f}")
+              f"{r2_per_point(HEAD[test][:, :, k:k + 1], yk):+.3f}")
 
     # Is the predicted spread calibrated?  An informative mean paired with an
     # NLL worse than the uninformed reference means the log_std branch is the
@@ -180,11 +194,18 @@ def main(ckpt, data, zero_x=False, zero_stats=False):
     # (oracle - uninformed) = 0.5 * <log(1 - R^2_g)> is the whole prize for
     # fixing sde_log_std; if that is large and "head now" is not, the location
     # is fine and only the spread branch is untrained.
-    print("\n  calibration of sde_log_std (test split, per grid point)")
-    res, sd_hat = Y[N_FIT:] - HEAD[N_FIT:], np.exp(LSD[N_FIT:])
+    # Computed on ALL draws, not the probe's test split: these numbers fit
+    # nothing, and this is the population the training harness validates on, so
+    # "uninformed" here must reproduce its ref_dyn.  The pooled mean of the two
+    # "head now" values is its dyn, and the pooled mean of the two "uninformed"
+    # values is its ref_dyn -- if either disagrees, the two harnesses are not
+    # looking at the same data and no comparison between them means anything.
+    print("\n  calibration of sde_log_std (all draws, per grid point)")
+    res, sd_hat = Y - HEAD, np.exp(LSD)
+    nows, unins = [], []
     for k, name in ((0, "mu"), (1, "sigma")):
         r, p = res[:, :, k], sd_hat[:, :, k]              # (N, G)
-        marg_g = Y[N_FIT:, :, k].std(0)                   # (G,)
+        marg_g = Y[:, :, k].std(0)                        # (G,)
         res_g = r.std(0)                                  # (G,)
         now = float((np.log(p) + 0.5 * (r / p) ** 2).mean())
         unin = float((np.log(marg_g) + 0.5).mean())
@@ -199,6 +220,11 @@ def main(ckpt, data, zero_x=False, zero_stats=False):
         print(f"      sd_hat {p.mean():.3f} +- {p.std():.3f}   "
               f"residual sd over grid {res_g.min():.3f}..{res_g.max():.3f}   "
               f"corr(|resid|, sd_hat) {c:+.3f}")
+        nows.append(now)
+        unins.append(unin)
+
+    print(f"\n  pooled over both operators -- compare against the training log")
+    print(f"    dyn {np.mean(nows):+.4f}   ref_dyn {np.mean(unins):+.4f}")
 
 
 if __name__ == "__main__":
