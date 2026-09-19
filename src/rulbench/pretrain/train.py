@@ -51,13 +51,22 @@ def to_device(batch: dict, device: torch.device) -> dict:
 
 
 @torch.no_grad()
-def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool = False) -> dict:
+def evaluate(model, sampler, draws, grid, batch_size, device,
+             zero_inputs: bool = False) -> dict:
     """Per-head validation losses over fixed draws.  Each part is weighted
     by what it averages over (real steps for health, windows otherwise),
-    so the numbers are independent of the eval batch size."""
+    so the numbers are independent of the eval batch size.
+
+    The uninformed references are computed from the SAME draws: a Gaussian
+    that knows only the marginal spread of each target scores log(sd) + 0.5.
+    For dyn that spread is taken per grid point and per operator, across
+    windows -- pooling the grid would credit a model for knowing that the
+    operator varies along x, which is prior structure and not evidence.
+    """
     model.eval()
     sums, weights = {}, {}
     per_step = {"health"}
+    y_dyn, y_end = [], []
     for batch in sampler.eval_batches(draws, batch_size):
         batch = to_device(batch, device)
         if zero_inputs:
@@ -71,8 +80,20 @@ def evaluate(model, sampler, draws, grid, batch_size, device, zero_inputs: bool 
             w = float(batch["mask"].sum()) if k in per_step else n_win
             sums[k] = sums.get(k, 0.0) + float(v) * w
             weights[k] = weights.get(k, 0.0) + w
+
+        y_dyn.append(batch["y_dyn"].float().cpu())
+        idx = batch["last_idx"].to(batch["y_health"].device)
+        y_end.append(batch["y_health"].gather(1, idx[:, None]).squeeze(1)
+                     .float().cpu())
     model.train()
-    return {k: sums[k] / weights[k] for k in sums}
+
+    res = {k: sums[k] / weights[k] for k in sums}
+
+    Y = torch.cat(y_dyn)                              # (N, G, 2)
+    res["ref_dyn"] = float((Y.std(dim=0).clamp(min=1e-6).log() + 0.5).mean())
+    e = torch.cat(y_end)                              # (N,)
+    res["ref_health_end"] = float(e.std().clamp(min=1e-6).log() + 0.5)
+    return res
 
 
 def main(argv=None):
