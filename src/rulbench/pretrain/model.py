@@ -60,6 +60,7 @@ class ModelConfig:
     min_logstd: float = -4.0 
     max_logstd: float = 1.0
     std_floor: float = 1e-4
+    health_tau : float = 32.0
 
 
 
@@ -181,7 +182,7 @@ def pretrain_loss(prediction, batch: dict, cfg: ModelConfig
 
     nll_h = _gauss_nll(batch["y_health"], prediction["health_mu"],
                        prediction["health_log_std"])
-    loss_health = (nll_h * m).sum() / m.sum().clamp(min=1)
+    # loss_health = (nll_h * m).sum() / m.sum().clamp(min=1)
     idx = batch["last_idx"][:, None]
     health_end = _gauss_nll(
         batch["hi_end"],
@@ -190,6 +191,11 @@ def pretrain_loss(prediction, batch: dict, cfg: ModelConfig
 
     loss_dyn = _gauss_nll(batch["y_dyn"], prediction["sde_mu"],
                           prediction["sde_log_std"]).mean()
+
+    pos = torch.arange(m.shape[1], device=m.device)[None, :]
+    age = (batch["last_idx"][:, None] - pos).clamp(0).float()
+    w = m * torch.exp(-age / cfg.health_tau)
+    loss_health = (nll_h * w).sum() / w.sum().clamp(min=1)
 
     total = cfg.w_dyn * loss_dyn + cfg.w_health * loss_health
     return total, dict(dyn=loss_dyn.item(), health=loss_health.item(),
